@@ -45,3 +45,60 @@
   直接 `.click()` 就发出去了。成功跳 `/publish/success`，4 秒后回发布页。
 - 后台标签页也能填，但最后发布前建议 `tabs select focus:true` 切前台一次。
 - **发布前自检清单**：`N/18` 图数、标题 value、`/1000` 计数、`a.tiptap-topic` 数、时间框 value。
+
+## 🔑 笔记详情页必须有 xsec_token（2026-09-15 实测）
+
+直接导航 `https://www.xiaohongshu.com/explore/<note_id>` → **300031「当前笔记暂时无法浏览」+ 滑块验证**。
+正确姿势：token 就藏在主页卡片的 href 里，取出来导航即可：
+
+```js
+// 在用户主页跑
+const it=[...document.querySelectorAll('section.note-item')].find(s=>s.innerText.includes('关键词'));
+it.querySelector('a.cover').getAttribute('href');
+// → /user/profile/<uid>/<note_id>?xsec_token=XXX=&xsec_source=pc_user
+```
+
+导航这个 URL 会自动 302 到 `/explore/<note_id>?xsec_token=...` 并正常打开。
+`section.note-item` 上自带 `data-note-id` / `data-index`。**别用 `a[href*="/explore/"]` 匹配**——
+主页那批 href 是**不带 token** 的，点它必 404。置顶笔记的顺序每次渲染会变，别按 DOM 下标硬编码。
+
+## ⚠️ 后台标签页：点不动 UI，但导航和 eval 照常
+
+`document.hidden=true` 时布局/命中测试不可靠：所有元素 rect 会算成同一个值，
+`act`/`click` 一律报「被其它元素遮挡」；**`innerText` 也返回空**（依赖渲染），找元素要改用 `textContent`。
+**先查 `document.hidden`**，别去追不存在的浮层。`navigate`、`eval`、`network`、`snapshot` 在后台照常可用——
+**能用导航和 eval 解决的就别用点击**。（`tabs select focus:true` 不一定能把它变成前台。）
+
+## 评论点赞（2026-09-15 实测）
+
+- DOM：`div.comment-item#comment-<comment_id>`，内含 `.author .name` / `.note-text` / `.like-wrapper`。
+- **`.like-wrapper.like-active` 是默认类名，不代表已赞**。判已赞只认接口 `comment/page` 返回的 `liked` 字段。
+- 点赞：`commentItem.querySelector('.like-wrapper').click()` —— **JS 合成点击就生效**，不用真实鼠标事件。
+  一次 eval 循环点 9 条全部成功。
+- 验收：`navigate action:reload` 后重读 `comment/page` 接口，`liked:true` + `like_count:"0"→"1"`。
+  **别拿 DOM 类名当验收**——那是你自己点出来的。
+
+## 私信（2026-09-15 实测打通）
+
+入口 `https://www.xiaohongshu.com/chat?openUid=<user_id>`，**可直接导航，不需要 xsec_token**。
+（主页上的「发消息」按钮是 `button.xhs-user-im-btn`，`aria-label="发消息"`，点它会开新标签页到这个 URL。）
+
+- **输入框是 contenteditable，不是 textarea**：`.xhs-im-input-bar-editor`。
+  没有「发送」按钮——**回车即发**。
+- 发消息：focus → 选中全部 → `execCommand('insertText', ...)` → 派发 Enter
+  （`keydown`/`keypress`/`keyup`，带 `keyCode:13`、`bubbles:true`）。发完输入框自清空。
+- 会话标题在 `.xhs-im-chat-window__header-name`，**发送前先核这个名字**再发，防止发错人。
+- 🔴 **陌生人（对方没关注、也没回复过你）24 小时内只能发 1 条文字消息**，页面上明写这句提示。
+  **一条就是一次机会，发前想清楚。**
+- **普通文案里的站外链接不会被静默拦**——实测把 `https://…` 直接放进第一条私信，正常送达。
+  不需要拆字/谐音，也**不要**去做伪装链接（绕审核不可取，且被静默拦截时对方根本收不到）。
+
+## 通知中心不是评论全集
+
+`/notification?tab=comment` 只显示**极少数**最近通知（实测 7 万粉账号只有 3 条），
+「查看更多历史消息」也加载不出更多。**要拿某条笔记的全部评论，进笔记详情读 `comment/page` 接口。**
+
+## 用户主页
+
+`/user/profile/<user_id>?xsec_token=...&xsec_source=pc_comment` 可正常打开
+（token 从评论区的 `a[data-user-id]` 上取，属性 `data-xsec-token` 里就有）。
