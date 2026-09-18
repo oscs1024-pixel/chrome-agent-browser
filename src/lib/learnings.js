@@ -20,6 +20,15 @@ const ALIAS = {
   'larksuite.com': 'feishu.cn',
   'qpic.cn': 'weixin.qq.com',
   'weibo.com': 'weibo.cn',
+  'weixin': 'weixin.qq.com',
+  'taobao': 'taobao.com',
+  'feishu': 'feishu.cn',
+  'weibo': 'weibo.cn',
+  'zhihu': 'zhihu.com',
+  'bilibili': 'bilibili.com',
+  'douban': 'douban.com',
+  'jd': 'jd.com',
+  'xiaohongshu': 'xiaohongshu.com',
 };
 
 // 'https://my.feishu.cn/base/x?y=1' → 'my.feishu.cn'
@@ -46,9 +55,14 @@ function resolveKey(domain) {
   if (parts.length === 1) {
     if (known.has(d)) return d;
     if (ALIAS[d]) return ALIAS[d];
-    for (const k of known) {
-      if (k.split('.')[0] === d) return k;
+    for (const tld of ['.com', '.cn', '.io', '.org', '.net']) {
+      if (known.has(d + tld)) return d + tld;
     }
+    const matched = [...known].filter((k) => k.split('.')[0] === d);
+    if (matched.length === 1) return matched[0];
+    const rootMatches = matched.filter((k) => k.split('.').length === 2);
+    if (rootMatches.length) return rootMatches[0];
+    if (matched.length) return matched[0];
   }
   for (let i = 0; i < parts.length - 1; i++) {
     const cand = parts.slice(i).join('.');

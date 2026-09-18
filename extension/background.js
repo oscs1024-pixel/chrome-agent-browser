@@ -856,15 +856,17 @@ async function syncGroup(tabId, owners) {
 // 两个来源取并集：槽（可能指向还没来得及贴标记的新页）和记账（可能有孤儿）。
 async function resyncMarks() {
   try {
-    const [all, sess] = await Promise.all([
-      chrome.storage.local.get(null),
-      chrome.storage.session.get(MARKED_TABS),
-    ]);
-    const tabs = new Set(Object.entries(all).filter(([k]) => k.startsWith(SLOT_PREFIX)).map(([, v]) => v));
-    for (const [k, v] of Object.entries(all)) {
-      if (k.startsWith(REG_PREFIX) && Array.isArray(v)) for (const t of v) tabs.add(t);
+    const { [MARKED_TABS]: marked = [] } = await chrome.storage.session.get(MARKED_TABS);
+    const tabs = new Set(marked);
+    const lives = await liveList();
+    if (lives.size) {
+      const liveKeys = Array.from(lives).flatMap((sid) => [agentTabKey(sid), regKey(sid)]);
+      const stored = await chrome.storage.local.get(liveKeys);
+      for (const [k, v] of Object.entries(stored)) {
+        if (k.startsWith(SLOT_PREFIX) && typeof v === 'number') tabs.add(v);
+        else if (k.startsWith(REG_PREFIX) && Array.isArray(v)) for (const t of v) tabs.add(t);
+      }
     }
-    for (const t of sess[MARKED_TABS] || []) tabs.add(t);
     for (const tabId of tabs) await syncMark(tabId);
   } catch { /* 同上 */ }
 }
