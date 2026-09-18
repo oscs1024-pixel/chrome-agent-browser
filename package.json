@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-browser",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Chrome Agent Browser 浏览器自动化工具包，通过 MCP 与 Pi 原生工具操控日常 Chrome。",
   "type": "module",
   "bin": {

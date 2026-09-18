@@ -378,20 +378,20 @@
 
     if (opts && opts.probeHover) {
       const candidates = rows.filter((r) => isHoverTrigger(r.el)).slice(0, 6);
-      for (const hc of candidates) {
+      for (const cand of candidates) {
         try {
-          hc.el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true }));
-          hc.el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }));
-          const subItems = Array.from(hc.el.querySelectorAll('a, button, [role="menuitem"], li'))
+          cand.el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true }));
+          cand.el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }));
+          const subItems = Array.from(cand.el.querySelectorAll('a, button, [role="menuitem"], li'))
             .filter((e) => e.offsetParent !== null && (e.innerText || e.textContent).trim())
             .map((e) => (e.innerText || e.textContent).trim().replace(/\s+/g, ' '))
             .filter((t) => t.length > 0 && t.length < 30);
           if (subItems.length) {
             const preview = subItems.slice(0, 4).join(' | ') + (subItems.length > 4 ? ' …' : '');
-            hc.hint = (hc.hint ? hc.hint + ', ' : '') + `hover first: ${preview}`;
+            cand.hint = (cand.hint ? cand.hint + ', ' : '') + `hover first: ${preview}`;
           }
-          hc.el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true, cancelable: true }));
-          hc.el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, cancelable: true }));
+          cand.el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true, cancelable: true }));
+          cand.el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, cancelable: true }));
         } catch {}
       }
     }
@@ -1952,14 +1952,8 @@
         + '或用 selector（指定 input）/ dropSelector（指定拖放区）明确告诉我往哪儿放。');
     }
 
-    // 2026-09-09 Tripo3D Studio 实测踩过的坑：很多站点的上传区是「一个
-    // opacity-0 的隐形 <input type=file> 精确覆盖在自定义样式的可视 dropzone
-    // 上面」。把 drop 发给外层容器，容器的 dragover 监听器会 preventDefault
-    // （看起来像接住了），但真正处理 change/drop 的是那个隐形 input——容器
-    // 从不转发 dataTransfer.files，上传因此静默失败，返回值却说「已拖放」。
-    // 当年只能靠 agent 手动 eval 打 id、把 dropSelector 精确指到那个 input
-    // 才绕过去。这里把这一步收进来自动做：目标不是 file input 本身时，
-    // 找它内部与它面积最接近（多半就是精确覆盖）的 file input 顶替上去。
+    // 隐藏 input[type=file] 自动穿透：许多站点上传区为透明 input 精确覆盖在自定义 dropzone 上。
+    // 目标若不是 file input 本身，自动检索内部覆盖的真实 input 顶替分发。
     if (target.tagName !== 'INPUT' || target.type !== 'file') {
       const nested = target.querySelectorAll ? [...target.querySelectorAll('input[type=file]')] : [];
       if (nested.length === 1) {

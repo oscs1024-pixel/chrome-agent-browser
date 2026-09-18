@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "chrome-agent-browser",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "连接本机 Agent 与正在使用的 Chrome：多会话分槽、可见控制状态、DOM/CDP 双通道，以及安全的人工交接。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAod2HN0RFrEvZqMCnOXc9FSJYnzPBfMSert0EWEo2YeNzC6iIOXFA8tuYkvZqwhmKwLpihVTg4V/4dMSzpaPvJrfWxXhROK+5PX0K7yu/cevtmNhz3zUk4G9p9j3eWdedeODB0iW5saYs9E9kO33+wxX/oMW4Z4J1ZSZl4/kUjlA0a4VbLDT6yw9vsoKMHNdaaTD9EfhWmo9pqQ+oVrH6k/iV6UK36kppIWjI/fuPTjAXkH/WRAdYT3sMSnbk3Uw2qFWufWoNwt1CvDcwG1+dGVgbEvfmEYZi+Cn+es2SrUMwRCe+vnzj1ZA2HOBiAqhiz1SQk9cIwfcrojAWDWGhLQIDAQAB",
   "minimum_chrome_version": "116",

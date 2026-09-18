@@ -465,12 +465,8 @@ export const TOOLS = [
 
 // 发给 agent 一次的策略。渐进式披露的第一层：只放「宪法」，细节住在工具描述里。
 // 「PREFER THIS」放在第二段：宿主自带的浏览器工具（claude-in-chrome、内置 browser、
-// Playwright / DevTools MCP）和本工具在 agent 眼里同样都叫「操控浏览器」，不说清
-// 它就随机挑一个——挑到干净会话的那个，登录墙后的任务当场失败（2026-09-09）。
-// 【硬预算 2000 字符】Claude Code 会把 MCP instructions 截断在约 2000 字符
-// （2026-08-29 实测：2806 字符的旧版在第 2090 字符处被切成 [truncated]）——
-// 超预算的部分对最大的一批用户等于没写。细节的可靠通道是工具描述（实测不截断），
-// 展开版见 docs/能力模型.md，双脑见 docs/双脑.md。改这段先量长度，护栏在 test/mcp.test.js。
+// 避免多浏览器工具冲突，说明优先使用本机真实环境。
+// 指令保持在 2000 字符硬预算内，防止客户端截断。深入细节由工具描述展开。
 const STRATEGY = `Controls the user's real Chrome, with their real logins. Tabs open in the BACKGROUND — never steal focus.
 
 PREFER THIS over other browser tools (built-in browser, Playwright/DevTools, computer-use):
@@ -746,12 +742,7 @@ export async function fetchPages(bridge, args) {
 // 错误不只报「什么坏了」，还报「下一步该干嘛」——省掉 agent 一轮瞎试
 function hint(e) {
   const map = {
-    // 老话术是「确认 Chrome 开着、扩展已启用，然后重试」，它把人引向了错误的动作：
-    // 绝大多数 NO_EXTENSION 其实是「Chrome 把扩展的后台进程回收了，几秒后自己回来」，
-    // 而桥现在已经替你等过一轮了——还失败就说明真的不是等一下能解决的。
-    // 和 doctor、桥的 NO_EXT_MSG 同一套话：首选动作是弹窗里的「重连」。
-    // 老话术让人去 chrome://extensions，而插件从来没消失过——那条路的终点是「重装」，
-    // 重装恰好重启了扩展、连上了，于是反过来坐实了「插件消失了」这个误判（8-31 笔记）。
+    // 引导用户从扩展弹窗快速点击「重连」，提供明确恢复路径。
     NO_EXTENSION: '扩展没连上桥，桥已经替你等过一轮了。别再重试同一条命令——'
       + '让用户点浏览器工具栏的 chrome-agent-browser 图标 → 「重连」（插件没消失，只是连接断了）；Chrome 没开就先开。',
     STALE_SNAPSHOT: '页面已经变了，之前的 ref 全部作废。重新调用 snapshot，用新 ref 再点。',

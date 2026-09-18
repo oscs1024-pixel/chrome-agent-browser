@@ -14,6 +14,8 @@ import { extensionId } from './install.js';
 const EXPECTED_EXT_ID = extensionId();
 export const KNOWN_EXTENSION_IDS = new Set([
   'ljnomddomgifjdddbefdjmgekhdiijnn', // 本地固定 key 派生 ID
+  'kgjhhafpidimgkbbggkpeogjalhlcepd', // 用户当前加载的扩展 ID
+  'anomegjfbdhmlngioaickficohdimmnf', // 备用/商店分发 ID
   ...(process.env.CHROME_AGENT_BROWSER_ALLOWED_EXT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
 ]);
 if (EXPECTED_EXT_ID) KNOWN_EXTENSION_IDS.add(EXPECTED_EXT_ID);
@@ -38,16 +40,9 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
   ensureHome();
 
   const agents = new Set();      // role=agent 的连接
-  // role=extension 的连接。**按实例并存**，不是单槽。
-  //
-  // 单槽那版的死法（8-29 抓到）：主 Chrome 和 agent 起的 headless 实例
-  // 各自加载同一份扩展、各自来连，后来的把前一个踢掉、被踢的立刻重连再踢回去
-  // ——每秒一次，命令落在哪一方刚被踢掉的窗口里就报 NO_EXTENSION，
-  // 用户看到的是「插件时有时无」。
-  //
-  // 现在认 instanceId：同一个实例重连才替换，不同实例并存，命令按 primary()
-  // 路由到有窗口的那个。顺带把「同一个 Chrome 里装了两份扩展」（比如加 key
-  // 之前留下的旧 ID 条目被误启用）也一并接住了——那也只是多一个实例，不再是抢。
+  // role=extension 的连接：按实例并发管理，非单槽。
+  // 区分并存多个 Chrome 实例，识别 instanceId：相同实例重连执行平滑顶替，
+  // 多个不同实例同时存在时，通过 primary() 将命令精确路由至有窗口的实例。
   const extensions = new Set();
   // key 是「连接序号:消息id」，不是裸 id——每个 agent 进程的 id 都从 c1 开始数，
   // 只按 id 存会让两个会话的 c1 互相覆盖，响应串到别人的请求上，而且毫无征兆。

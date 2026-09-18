@@ -102,12 +102,8 @@ async function flushOutbox(sendFn) {
 // 判据是**现场问**，不是读缓存。
 //
 // 上一版读的是 storage.session 里的 bridgeConnected，而那个标志只在 offscreen
-// 主动上报时才更新——它被浏览器冻结或回收时根本没机会上报 false，标志就永久
-// 卡在 true。于是下面那个每 30 秒的自愈 alarm 每次醒来都判「连着呢」直接返回，
-// 一次重连都不发起。8-31 15:46 断开、17:25 用户手动重载扩展才恢复，中间 99
-// 分钟就是这么来的：扩展这侧以为自己在线，桥那侧早就把它判死了。
-//
-// 缓存留着，但只喂 badge 和 popup 的显示，绝不参与「要不要重连」这个判断。
+// 现场探测确保连接真实性：休眠恢复或半开连接不能轻信内存标记。
+// 缓存仅用于 popup/badge 显示，重连判定以 live 为准。
 async function connected() {
   return (await connState()).connected;
 }
@@ -150,13 +146,8 @@ let directBridgeVersion = '';
 
 // 这个 Chrome 实例的身份证。
 //
-// 桥靠它区分两件以前分不开的事：「同一个扩展断线重连」该替换掉旧连接，
-// 「另一个 Chrome 也装了这份扩展」该并存。分不开的时候桥只能留一个槽，
-// 于是主窗口和 agent 起的 headless 实例每秒互相踢一次（8-29 抓到的现场）。
-//
-// 存在 storage.local：同一个 profile 重启、重载扩展之后都不变，
-// 而另起一个 --user-data-dir 的实例必然拿到一个新的。
-// 扩展 ID 不能拿来当它用——同一份代码在两个 Chrome 里 ID 是一样的。
+// 实例标识：区分同一扩展的断线重连（平滑替换）与多 Chrome 实例并存。
+// 持久化于 storage.local，确保跨重载稳定。
 let iidCache = null;
 async function instanceId() {
   if (iidCache) return iidCache;
@@ -326,9 +317,7 @@ async function onMessage(msg) {
     const handler = HANDLERS[msg.cmd];
     if (!handler) throw err('INTERNAL', `未知命令 ${msg.cmd}`);
     // await 而不是 void：标记那一侧只信 storage 里的名单（见 syncMark 上的说明），
-    // 这里必须保证「本命令携带的名单已落盘」先于命令完成后的刷新，否则新会话的
-    // 第一条命令刷标记时会读到没有自己的旧名单——正是当年那个落盘竞态
-    // 显示名优先使用桥提供的 label；未知宿主使用稳定 client slug。
+    // 确保本命令携带的会话名单先落盘，再执行命令后的标记刷新。
     await noteSession(msg.sid, msg.label || msg.client, msg.live);
     // 缺省 tabId 在这里统一解析成具体 tabId（会话级槽），handler 拿到的永远是实值。
     // ctx 只在本函数内现场传——SW 里两条命令的 await 会交错，绝不能用模块级变量存「当前消息」
@@ -401,12 +390,8 @@ async function coachNote(sid, cmd) {
 }
 
 // 多线检测：本会话的户口簿上已有 ≥2 个还开着的标签页，这条命令却没带 tabId。
-// 缺省槽是**每会话一个**，而 Claude Code 的主 agent 和它派的 subagent 共用同一个
-// MCP 连接——扩展眼里是同一个会话，槽也是同一个。任何一方 tabs/navigate 都会
-// 把槽改写，另一方下一条缺省命令就落进别人的页面（8-29 那晚的事故路径）。
-// 这在扩展侧无解（工具调用不携带 caller 身份），唯一的防线是让 agent 切到
-// 显式 tabId——在回执里当面说，比任何文档都有效（同 coachNote 的教训）。
-// 10 分钟冷却：多线是持续状态，每条命令都唠叨的提醒很快会被当背景噪音。
+// 缺省槽每会话一个；多工作线（如 subagent 并发）若不带 tabId 易相互改写。
+// 回执中进行针对性提示，冷却时间 10 分钟避免信息过载。
 async function multiLineNote(sid, explicitTab, cmd, resolved) {
   if (!sid || explicitTab || NO_SLOT_CMDS.has(cmd)) return '';
   try {
@@ -534,13 +519,8 @@ async function claimTab(sid, tabId, ctx) {
 // ---------- 户口簿 ----------
 //
 // 槽只回答「缺省 tabId 落到哪」，回答不了「这个会话都在哪些页面上」。
-// 多线并行（一个会话开几个页、或父子 agent 显式分页干活）时，显式 tabId
-// 驱动的页面从不进槽——而标记、冲突检测以前都从槽反推，于是这些页面全部
-// 裸奔：没有光标、没有驾驶舱、没有标签组，别的会话还能把它们「继承」走。
-// 8-29 那晚的两个症状（subagent 抢槽、显式分页后标记消失）就是这么来的。
-//
-// 户口簿按会话记「它操作过的所有标签页」。存 local，理由同槽：跨扩展重载
-// 不丢，读时靠 live 名单 + onRemoved 清理兜住陈旧条目。
+// 多线并行时，显式 tabId 驱动的页面由户口簿统一纳管，
+// 确保即便脱离缺省槽也保留完整视觉标记与防抢保护。
 //
 // 前缀不能叫 agentTabs:——'agentTabs:x'.startsWith('agentTab:') 为真，
 // 会混进所有按 SLOT_PREFIX 扫描的地方。
@@ -2692,11 +2672,8 @@ cdp.reapOrphans();
 chrome.alarms?.onAlarm.addListener(async () => {
   await ensureOffscreen();
   if (await connected()) return setBadge(true);
-  // 先让 offscreen 那条腿尽力——kick 会等它把五个端口探完再回话。
-  // 不等就直接自己顶上的话，两条腿会同时往桥上连，而桥只认一个、后来者
-  // 把前一个踢掉、被踢的立刻重连再踢回去，就是 8-29 抓到的每秒互相挤兑。
-  // 但也只让它这一次：「文档建起来了却连不上」是踩过的死局，
-  // 判据永远是连上了没有，不是文档在不在。
+  // 优先等待 offscreen 完成端口探测，探测失败再由 SW 直连接管，
+  // 避免双通道并发建连产生抢占抖动。
   const kicked = await chrome.runtime.sendMessage({ __abBridge: 'kick' }).catch(() => null);
   if (kicked?.connected) return setBadge(true);
   await directConnect();
