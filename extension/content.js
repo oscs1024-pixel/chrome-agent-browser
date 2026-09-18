@@ -246,6 +246,7 @@
     if (role === 'canvas') bits.push('visual:screenshot');
     if (isHoverTrigger(el) && !el.getAttribute('aria-expanded')) bits.push('hover first');
     if (isDisabled(el)) bits.push('disabled');
+    return bits.length ? ` (${bits.join(', ')})` : '';
   }
 
   // ---------- 快照 ----------
