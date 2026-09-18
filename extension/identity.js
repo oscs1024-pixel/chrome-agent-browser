@@ -27,36 +27,24 @@
 // 「标签组是绿的、页内边框也是绿的」这件事上得不到互相印证。棕色映射到 grey：
 // Chrome 没有棕，灰是唯一不会被认成别的会话的中性色。
 export const MARK_PALETTE = [
-  { emoji: '🟣', color: '#a855f7', group: 'purple' },
-  { emoji: '🟢', color: '#22c55e', group: 'green' },
-  { emoji: '🔵', color: '#3b82f6', group: 'blue' },
-  { emoji: '🟠', color: '#f97316', group: 'orange' },
-  { emoji: '🔴', color: '#ef4444', group: 'red' },
-  { emoji: '🟡', color: '#eab308', group: 'yellow' },
-  { emoji: '🟤', color: '#a16207', group: 'grey' },
-  { emoji: '🟪', color: '#a855f7', group: 'purple' },
-  { emoji: '🟩', color: '#22c55e', group: 'green' },
-  { emoji: '🟦', color: '#3b82f6', group: 'blue' },
-  { emoji: '🟧', color: '#f97316', group: 'orange' },
-  { emoji: '🟥', color: '#ef4444', group: 'red' },
-  { emoji: '🟨', color: '#eab308', group: 'yellow' },
-  { emoji: '🟫', color: '#a16207', group: 'grey' },
+  // 色值刻意比 Tailwind 默认色深一档：页边框要同时压得住白底网页，
+  // 又能在深色页面上保留足够色度。红色只作为身份色使用；危险确认仍有
+  // 「危险操作」文字和独立版式，不靠红色单独传意。
+  { emoji: '🟣', color: '#7c3aed', group: 'purple', shape: 'circle' },
+  { emoji: '🟢', color: '#059669', group: 'green', shape: 'circle' },
+  { emoji: '🔵', color: '#2563eb', group: 'blue', shape: 'circle' },
+  { emoji: '🟠', color: '#ea580c', group: 'orange', shape: 'circle' },
+  { emoji: '🔴', color: '#e11d48', group: 'red', shape: 'circle' },
+  { emoji: '🟡', color: '#b45309', group: 'yellow', shape: 'circle' },
+  { emoji: '🟤', color: '#92400e', group: 'grey', shape: 'circle' },
+  { emoji: '🟪', color: '#7c3aed', group: 'purple', shape: 'square' },
+  { emoji: '🟩', color: '#059669', group: 'green', shape: 'square' },
+  { emoji: '🟦', color: '#2563eb', group: 'blue', shape: 'square' },
+  { emoji: '🟧', color: '#ea580c', group: 'orange', shape: 'square' },
+  { emoji: '🟥', color: '#e11d48', group: 'red', shape: 'square' },
+  { emoji: '🟨', color: '#b45309', group: 'yellow', shape: 'square' },
+  { emoji: '🟫', color: '#92400e', group: 'grey', shape: 'square' },
 ];
-
-// 标签栏标题前缀的尾哨兵，U+2009 窄空格。
-//
-// v0.9.1 起标题前缀已退役（favicon 头像取代，mark.js 不再写它），这两个导出
-// 只服务一件事：popup 的会话列表在升级瞬间可能读到旧页面残留的带前缀标题，
-// stripMarkPrefix 负责把它剥干净。等一轮版本过去后可以整体删除。
-export const MARK_SENTINEL = '\u2009';
-
-// 认前缀只认哨兵，不认 emoji 列表：后者会在调色板加新颜色的那天悄悄失效。
-// 位置上限是防呆——万一某个站点的标题真的用了 U+2009，也不会正好在最前面。
-export function stripMarkPrefix(title) {
-  const s = String(title || '');
-  const i = s.indexOf(MARK_SENTINEL);
-  return i >= 0 && i <= 12 ? s.slice(i + 1) : s;
-}
 
 // FNV-1a。选它不是因为快，是因为它短到可以原样抄进任何一侧，
 // 且在不同 JS 引擎上结果一模一样——外观必须在扩展、桥、测试里算出同一个值。
@@ -88,5 +76,13 @@ export function identityOf(sid, client) {
   const slug = client || (i > 0 ? s.slice(0, i) : '');
   const code = i >= 0 && i < s.length - 1 ? s.slice(i + 1) : s.slice(-6);
   const p = MARK_PALETTE[hash32(s) % MARK_PALETTE.length];
-  return { sid: s, emoji: p.emoji, color: p.color, group: p.group, label: prettyClient(slug), code };
+  return {
+    sid: s,
+    emoji: p.emoji,
+    color: p.color,
+    group: p.group,
+    shape: p.shape,
+    label: prettyClient(slug),
+    code,
+  };
 }

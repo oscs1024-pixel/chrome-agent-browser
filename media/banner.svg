@@ -3,47 +3,66 @@
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&amp;family=Noto+Serif+SC:wght@700;900&amp;display=swap');
     </style>
-    <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#D4532B"/><stop offset="100%" stop-color="#A83518"/>
-    </linearGradient>
-    <linearGradient id="barGradSoft" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#8B5E3C"/><stop offset="100%" stop-color="#6E4A2E"/>
+    <linearGradient id="accentBar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3B82F6"/><stop offset="100%" stop-color="#1D4ED8"/>
     </linearGradient>
   </defs>
 
-  <rect width="1200" height="400" fill="#111111"/>
-  <rect x="60" y="48" width="3" height="304" fill="#D4532B"/>
+  <rect width="1200" height="400" fill="#0B0F19"/>
+
+  <!-- 左侧竖条与横线 -->
+  <rect x="60" y="48" width="3" height="304" fill="url(#accentBar)"/>
   <rect x="60" y="48" width="760" height="2" fill="#FFFFFF" opacity="0.15"/>
   <rect x="60" y="350" width="760" height="1" fill="#FFFFFF" opacity="0.15"/>
   <rect x="860" y="80" width="1" height="240" fill="#FFFFFF" opacity="0.08"/>
-  <text x="80" y="88" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="11" font-weight="700" letter-spacing="3" fill="#D4532B">MCP SERVER + CHROME EXTENSION</text>
-  <text x="80" y="178" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="68" font-weight="900" fill="#FFFFFF" letter-spacing="-2">huashu-chrome</text>
-  <text x="80" y="222" font-family="'Noto Serif SC', 'Source Han Serif', 'Inter', serif" font-size="22" font-weight="700" fill="#EEEEEE" letter-spacing="1">让 agent 操控你自己的 Chrome</text>
+
+  <!-- 眉标 -->
+  <text x="80" y="88" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="11" font-weight="700" letter-spacing="3" fill="#3B82F6">MCP SERVER + CHROME MV3 EXTENSION · PI AGENT</text>
+
+  <!-- 主标题 -->
+  <text x="80" y="178" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="68" font-weight="900" fill="#FFFFFF" letter-spacing="-2">agent-browser</text>
+
+  <!-- 副标题 -->
+  <text x="80" y="222" font-family="'Noto Serif SC', 'Source Han Serif', 'Inter', serif" font-size="22" font-weight="700" fill="#EEEEEE" letter-spacing="1">原生操控你自己日常的 Chrome</text>
+
+  <!-- 三个特性 -->
   <text x="80" y="284" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="15" font-weight="500" fill="#BBBBBB" letter-spacing="0.5">带着全部登录态</text>
-  <text x="198" y="284" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="15" font-weight="700" fill="#D4532B">·</text>
-  <text x="210" y="284" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="15" font-weight="500" fill="#BBBBBB" letter-spacing="0.5">22 个工具</text>
-  <text x="288" y="284" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="15" font-weight="700" fill="#D4532B">·</text>
-  <text x="300" y="284" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="15" font-weight="500" fill="#BBBBBB" letter-spacing="0.5">经验会回流</text>
-  <text x="80" y="312" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="14" font-weight="400" fill="#888888" letter-spacing="0.3">不用 API key  ·  不用重新登录  ·  用的就是你此刻这个浏览器里的身份</text>
-  <text x="80" y="370" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#666666" letter-spacing="0.3">npx huashu-chrome install · Claude Code / Codex / Cursor / Gemini CLI 通用</text>
-  <text x="890" y="108" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="10" font-weight="700" letter-spacing="2" fill="#D4532B" opacity="0.9">WHERE THE ANSWER LIVES</text>
-  <rect x="890" y="128" width="4" height="42" fill="#D4532B"/>
-  <rect x="902" y="128" width="258" height="42" fill="#1A1A1A" stroke="#2C2C2C" stroke-width="1"/>
-  <text x="914" y="146" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="13" font-weight="700" letter-spacing="1" fill="#D4532B">NETWORK</text>
+  <text x="198" y="284" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="15" font-weight="700" fill="#3B82F6">·</text>
+  <text x="210" y="284" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="15" font-weight="500" fill="#BBBBBB" letter-spacing="0.5">23 个工具</text>
+  <text x="288" y="284" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="15" font-weight="700" fill="#3B82F6">·</text>
+  <text x="300" y="284" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="15" font-weight="500" fill="#BBBBBB" letter-spacing="0.5">L1/L2 双层执行</text>
+  <text x="428" y="284" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="15" font-weight="700" fill="#3B82F6">·</text>
+  <text x="440" y="284" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="15" font-weight="500" fill="#BBBBBB" letter-spacing="0.5">多会话防撞车</text>
+
+  <!-- 说明行 -->
+  <text x="80" y="312" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="14" font-weight="400" fill="#888888" letter-spacing="0.3">不用 API key  ·  不用开启调试端口  ·  用的就是你此刻这个浏览器里的身份</text>
+
+  <!-- 底部命令 -->
+  <text x="80" y="370" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="12" font-weight="400" fill="#666666" letter-spacing="0.3">npx agent-browser install · Claude Code / Codex / Cursor / Pi Agent 通用</text>
+
+  <!-- 右侧：三层信息载体 -->
+  <text x="890" y="108" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="10" font-weight="700" letter-spacing="2" fill="#3B82F6" opacity="0.9">WHERE THE ANSWER LIVES</text>
+
+  <rect x="890" y="128" width="4" height="42" fill="#3B82F6"/>
+  <rect x="902" y="128" width="258" height="42" fill="#111827" stroke="#1F2937" stroke-width="1"/>
+  <text x="914" y="146" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="13" font-weight="700" letter-spacing="1" fill="#3B82F6">NETWORK</text>
   <text x="1148" y="146" text-anchor="end" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="8" font-weight="700" letter-spacing="1.5" fill="#666666">DATA</text>
   <text x="914" y="161" font-family="'Noto Serif SC', 'Source Han Serif', 'Inter', serif" font-size="11" font-weight="700" fill="#999999">接口自己命名字段</text>
-  <rect x="890" y="180" width="4" height="42" fill="#B0603A"/>
-  <rect x="902" y="180" width="258" height="42" fill="#1A1A1A" stroke="#2C2C2C" stroke-width="1"/>
-  <text x="914" y="198" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="13" font-weight="700" letter-spacing="1" fill="#B0603A">DOM</text>
+
+  <rect x="890" y="180" width="4" height="42" fill="#2563EB"/>
+  <rect x="902" y="180" width="258" height="42" fill="#111827" stroke="#1F2937" stroke-width="1"/>
+  <text x="914" y="198" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="13" font-weight="700" letter-spacing="1" fill="#2563EB">DOM</text>
   <text x="1148" y="198" text-anchor="end" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="8" font-weight="700" letter-spacing="1.5" fill="#666666">ACTIONS</text>
   <text x="914" y="213" font-family="'Noto Serif SC', 'Source Han Serif', 'Inter', serif" font-size="11" font-weight="700" fill="#999999">snapshot → click / fill</text>
+
   <rect x="890" y="232" width="4" height="42" fill="#5A5A5A"/>
-  <rect x="902" y="232" width="258" height="42" fill="#1A1A1A" stroke="#2C2C2C" stroke-width="1"/>
+  <rect x="902" y="232" width="258" height="42" fill="#111827" stroke="#1F2937" stroke-width="1"/>
   <text x="914" y="250" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="13" font-weight="700" letter-spacing="1" fill="#5A5A5A">PIXELS</text>
   <text x="1148" y="250" text-anchor="end" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="8" font-weight="700" letter-spacing="1.5" fill="#666666">LAST RESORT</text>
   <text x="914" y="265" font-family="'Noto Serif SC', 'Source Han Serif', 'Inter', serif" font-size="11" font-weight="700" fill="#999999">只在版式本身是问题时</text>
-  <rect x="890" y="290" width="270" height="36" fill="#161616" stroke="#2C2C2C" stroke-width="1"/>
-  <path d="M 1144 300 L 920 300" stroke="#D4532B" stroke-width="1" fill="none" stroke-dasharray="3 3" opacity="0.8"/>
-  <path d="M 926 296 L 918 300 L 926 304 Z" fill="#D4532B"/>
+
+  <rect x="890" y="290" width="270" height="36" fill="#0F172A" stroke="#1F2937" stroke-width="1"/>
+  <path d="M 1144 300 L 920 300" stroke="#3B82F6" stroke-width="1" fill="none" stroke-dasharray="3 3" opacity="0.8"/>
+  <path d="M 926 296 L 918 300 L 926 304 Z" fill="#3B82F6"/>
   <text x="906" y="320" font-family="'Inter', system-ui, -apple-system, sans-serif" font-size="9" font-weight="500" letter-spacing="0.5" fill="#888888">learnings · 踩过的坑写回域名笔记，下次直接跳过</text>
 </svg>

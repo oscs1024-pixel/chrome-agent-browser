@@ -9,11 +9,9 @@
 //   动作感 —— 它此刻在做什么：呼吸泛光的箭头光标，滑到哪就是在动哪
 //   意图感 —— 它在想什么：右下角驾驶舱（正在做 / 准备做 / 时间线 / 需要确认）
 //
-// 品牌的边界（花叔定的）：头像只出现在**我们自己的标识位**——驾驶舱、ask 浮条、
+// 品牌的边界：头像只出现在**我们自己的标识位**——驾驶舱、ask 浮条、
 // 扩展图标、标签组。favicon 是网站的门牌，不动；指针是指针，不拿头像替。
-// 标题 emoji 前缀已退役（丑），标签栏的存在感交给彩色标签组；
-// 顺手消掉「污染 document.title」的已知副作用（少数站点拿它做分享标题），
-// identity.js 里的 stripMarkPrefix 留作过渡清理。
+// 标签栏的存在感交给彩色标签组；document.title 与 favicon 始终保持原样。
 //
 // ask（人工介入浮条）也并进来了：页面上只该有一套我们的 UI，两个文件各画
 // 各的迟早叠在一起。合并还白捡一个修复——ask 从此也在 context 看门狗的
@@ -29,19 +27,19 @@
 // 消失，shadow root 是唯一彻底的隔离。
 
 (() => {
-  if (window.__hcMark) return;
-  window.__hcMark = true;
+  if (window.__abMark) return;
+  window.__abMark = true;
 
   // 顶层框架才画。content.js 是 allFrames 注入的，本文件按设计只注顶层，
   // 但防御性地守住：iframe 里也画的话，一个带广告的页面会冒出七八套 UI。
   const TOP = window.top === window;
 
-  // 花叔 Q 版头像（渔夫帽+圆眼镜），64px 圆形裁剪 PNG。内嵌 base64 而不是
+  // chrome-agent-browser 专属图标，圆形裁剪 PNG。内嵌 base64 而不是
   // chrome.runtime.getURL：后者要开 web_accessible_resources，任何网页都能
   // 借它探测扩展存在（指纹）。页面里的呈现一律画到 canvas 上
   // （createImageBitmap(Blob) 是纯内存操作），绝不走 <img src="data:">——
   // 严格 CSP 的站点 img-src 不带 data: 时那条路会静默烂掉。
-  const AVATAR_B64 = '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';
+  const AVATAR_B64 = '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';
 
   let bitmapP = null;
   function avatarBitmap() {
@@ -65,147 +63,225 @@
     return c;
   }
 
+  // 身份不能只靠颜色。identity.js 给每个会话稳定分配 circle / square，
+  // 这里把形状真的画出来；之前形状只存在于退役的标题 emoji 里，页面 UI
+  // 永远都是圆头像，色觉不敏感用户实际上拿不到第二条识别线索。
+  function identityBadge(o, size = 24) {
+    const badge = document.createElement('span');
+    badge.className = `identity ${o.shape === 'square' ? 'square' : 'circle'}`;
+    badge.style.setProperty('--c', o.color);
+    badge.style.width = badge.style.height = `${size}px`;
+    badge.appendChild(avatarCanvas(Math.max(14, size - 6)));
+    return badge;
+  }
+
   // ---------- 状态 ----------
 
-  let owners = [];      // [{ emoji, color, label, code, sid }]
+  let owners = [];      // [{ emoji, color, shape, label, code, sid }]
   let logs = {};        // sid -> [{ t, text }] 新的在前（background 的环形缓冲）
   let intents = {};     // sid -> { text, t }   agent 用 status 声明的「准备做什么」
   let plan = [];        // 正在跑的批处理还剩哪些步（扩展生成的描述，不是 agent 的话）
   let tabLabel = '';    // agent 开页时声明的「这页是哪条线」（属于 tab，不属于某个主）
   let expanded = false; // 驾驶舱展开还是收成胶囊。偏好落在 chrome.storage.local
-  let host = null, wrap = null;
+  let stats = {};       // sid -> { steps, lastAction, durationSec }
+  let host = null, wrap = null, dock = null;
   let watchdog = null, flashTimer = null, tickTimer = null;
   const actState = new Map();   // sid -> { text, timer } 「刚刚做了什么」的短暂高亮
 
   const CSS = `
     :host { all: initial; }
-    .wrap { font: 500 12px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    .wrap {
+      color-scheme: dark;
+      font: 500 12px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      --panel: rgba(15, 23, 42, .96);
+      --panel-2: rgba(30, 41, 59, .96);
+      --text: #f8fafc;
+      --muted: #cbd5e1;
+      --subtle: #94a3b8;
+    }
 
     /* ---- 四边描边：常驻答「有没有主」，亮一下答「它刚动了」 ---- */
     .edge {
       position: fixed; pointer-events: none; z-index: 2147483645;
-      opacity: .38; transition: opacity .18s ease, filter .18s ease;
+      opacity: .74;
+      transition: opacity .18s ease, filter .18s ease, box-shadow .18s ease;
+      filter: saturate(1.05) drop-shadow(0 0 1px rgba(15,23,42,.42));
     }
-    .edge.t { top: 0; left: 0; right: 0; height: 2px; }
-    .edge.b { bottom: 0; left: 0; right: 0; height: 2px; }
-    .edge.l { top: 0; bottom: 0; left: 0; width: 2px; }
-    .edge.r { top: 0; bottom: 0; right: 0; width: 2px; }
-    .lit .edge { opacity: 1; filter: saturate(1.3); }
+    /* 顶边是主状态线，四周细边只负责把受控页面圈出来。这样白页上够清楚，
+       又不会像 2px 四边框那样长期抢页面内容。 */
+    .edge.t { top: 0; left: 0; right: 0; height: 3px; box-shadow: 0 2px 10px rgba(15,23,42,.16); }
+    .edge.b { bottom: 0; left: 0; right: 0; height: 1px; }
+    .edge.l { top: 0; bottom: 0; left: 0; width: 1px; }
+    .edge.r { top: 0; bottom: 0; right: 0; width: 1px; }
+    .lit .edge { opacity: 1; filter: saturate(1.25) drop-shadow(0 0 4px rgba(15,23,42,.34)); }
+    .lit .edge.t { box-shadow: 0 2px 16px rgba(15,23,42,.28); }
 
     /* ---- 虚拟光标：agent 的注意力在页面上的具象 ---- */
     /* 只动 transform/opacity——合成器动画，零重排。它要陪着页面跑几百个动作。 */
     .cursor {
       position: fixed; left: 0; top: 0; z-index: 2147483645;
       pointer-events: none; opacity: 0;
-      transition: transform .24s cubic-bezier(.2,.8,.3,1), opacity .4s ease;
+      transition: transform .24s cubic-bezier(.16,1,.3,1), opacity .35s ease;
       will-change: transform;
     }
     .cursor.on { opacity: 1; }
     .cursor .glow {
-      position: absolute; left: -32px; top: -32px; width: 64px; height: 64px;
-      border-radius: 50%; background: radial-gradient(circle, var(--c) 0%, transparent 62%);
-      opacity: .5; animation: hcBreathe 2.4s ease-in-out infinite;
+      position: absolute; left: -34px; top: -34px; width: 68px; height: 68px;
+      border-radius: 50%;
+      background: radial-gradient(circle, color-mix(in srgb, var(--c) 52%, transparent) 0%, transparent 66%);
+      opacity: .62; animation: abBreathe 2.4s ease-in-out infinite;
     }
-    @keyframes hcBreathe {
-      0%, 100% { transform: scale(1); opacity: .38; }
-      50%      { transform: scale(1.35); opacity: .68; }
+    @keyframes abBreathe {
+      0%, 100% { transform: scale(.92); opacity: .42; }
+      50%      { transform: scale(1.22); opacity: .72; }
     }
-    /* 箭头就是箭头（花叔定的）：白箭头+会话色描边，品牌感交给色环和泛光 */
-    .cursor svg { position: absolute; left: -2px; top: -2px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
-    /* 休眠：呼吸是「正在干活」的承诺，空闲 30 秒就得收起来，不能骗人 */
-    .cursor.doze { opacity: .45; }
-    .cursor.doze .glow { animation: none; opacity: .15; transform: scale(.55); }
-    .cursor.doze svg { opacity: .6; }
+    /* 白箭头负责跨页面对比度，会话色描边负责身份；深色阴影保证白底也不丢。 */
+    .cursor svg {
+      position: absolute; left: -2px; top: -2px;
+      filter: drop-shadow(0 1px 1px rgba(15,23,42,.78)) drop-shadow(0 3px 7px rgba(15,23,42,.28));
+      transform-origin: 6px 5px;
+    }
+    /* 休眠态只保留“此页有主”的低强度提示，不再持续呼吸。 */
+    .cursor.doze { opacity: .56; }
+    .cursor.doze .glow { animation: none; opacity: .1; transform: scale(.5); }
+    .cursor.doze svg { opacity: .72; }
     .cursor .ring {
-      position: absolute; left: -18px; top: -18px; width: 36px; height: 36px;
-      border: 2.5px solid var(--c); border-radius: 50%;
-      animation: hcRing .55s ease-out forwards;
+      position: absolute; left: -17px; top: -17px; width: 34px; height: 34px;
+      border: 2px solid var(--c); border-radius: 50%;
+      box-shadow: 0 0 0 1px rgba(255,255,255,.76) inset;
+      animation: abRing .55s cubic-bezier(.16,1,.3,1) forwards;
     }
-    @keyframes hcRing {
-      from { transform: scale(.35); opacity: .95; }
-      to   { transform: scale(1.9); opacity: 0; }
+    @keyframes abRing {
+      from { transform: scale(.35); opacity: 1; }
+      to   { transform: scale(1.85); opacity: 0; }
     }
-    .cursor.typing .glow { animation: hcType .5s ease-in-out infinite; }
-    @keyframes hcType {
-      0%, 100% { transform: scale(.9); opacity: .5; }
-      50%      { transform: scale(1.1); opacity: .8; }
+    .cursor.typing .glow { animation: abType .5s ease-in-out infinite; }
+    @keyframes abType {
+      0%, 100% { transform: scale(.86); opacity: .5; }
+      50%      { transform: scale(1.06); opacity: .84; }
     }
-    .cursor.pressed svg { transform: scale(.85); transition: transform .12s; }
+    .cursor.pressed svg { transform: scale(.84); transition: transform .12s; }
     /* bob 动画挂在 svg 上而不是 .cursor 上：.cursor 的 transform 是定位用的
        内联样式，keyframe 一接管它，光标会瞬移回 (0,0) */
-    .cursor.bob svg { animation: hcBob .5s ease-in-out; }
-    @keyframes hcBob {
+    .cursor.bob svg { animation: abBob .5s ease-in-out; }
+    @keyframes abBob {
       0%, 100% { transform: none; }
-      50%      { transform: translateY(26px); }
+      50%      { transform: translateY(22px); }
     }
 
     /* ---- 驾驶舱：右下角，收起是胶囊、展开是卡片 ---- */
     .dock {
-      position: fixed; right: 16px; bottom: 16px; z-index: 2147483646;
-      display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
-      transition: opacity .25s ease;
+      position: fixed; right: 18px; bottom: 18px; z-index: 2147483646;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+      transition: opacity .2s ease;
+      pointer-events: auto;
     }
     /* 让路：agent 要点的目标落在驾驶舱底下时，它必须瞬间变成「不存在」——
        真实事件(L2)打的是坐标，不让路就是替 agent 点了我们自己的面板 */
     .dock.dodge { pointer-events: none; opacity: .12; }
 
     .chip {
-      display: flex; align-items: center; gap: 6px;
-      padding: 5px 11px 5px 9px; border-radius: 999px;
-      background: rgba(24,24,27,.85); color: #fff; cursor: pointer;
-      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-      font-size: 11px; letter-spacing: .1px; white-space: nowrap;
-      max-width: 46vw; overflow: hidden;
-      box-shadow: 0 2px 10px rgba(0,0,0,.25);
-      opacity: .78; transition: opacity .18s ease, transform .18s ease;
-      animation: hcIn .24s cubic-bezier(.2,.8,.3,1);
+      appearance: none; box-sizing: border-box;
+      display: flex; align-items: center; gap: 8px;
+      min-height: 38px; padding: 6px 12px 6px 7px; border-radius: 999px;
+      border: 1px solid color-mix(in srgb, var(--c) 48%, rgba(255,255,255,.18));
+      background: color-mix(in srgb, var(--panel) 94%, var(--c)); color: var(--text); cursor: pointer;
+      -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
+      font: inherit; font-size: 11px; letter-spacing: .1px; white-space: nowrap;
+      max-width: 52vw; overflow: hidden;
+      box-shadow: 0 8px 24px rgba(15,23,42,.26), 0 2px 6px rgba(15,23,42,.2);
+      opacity: .96; transition: opacity .18s ease, transform .18s ease, box-shadow .18s ease;
+      animation: abIn .24s cubic-bezier(.16,1,.3,1);
     }
-    .chip:hover { opacity: 1; }
-    .chip.act { opacity: 1; transform: scale(1.03); }
-    /* 只写 from：终态取元素自己的计算样式——chip 落在 .78、card 落在 1，
-       写死 to 值的话总有一个在动画结束的瞬间跳变 */
-    @keyframes hcIn { from { opacity: 0; transform: translateY(8px); } }
+    .chip:hover { opacity: 1; transform: translateY(-1px); box-shadow: 0 10px 28px rgba(15,23,42,.32), 0 2px 8px rgba(15,23,42,.22); }
+    .chip:focus-visible { outline: 3px solid color-mix(in srgb, var(--c) 62%, white); outline-offset: 2px; }
+    .chip.act { opacity: 1; transform: translateY(-1px); }
+    /* 只写 from：终态取元素自己的计算样式——chip 和 card 的终态不同。 */
+    @keyframes abIn { from { opacity: .01; transform: translateY(10px); filter: blur(3px); } }
 
     .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-    /* 胶囊/卡片上的小头像，色环=会话色 */
-    .ava { border-radius: 50%; border: 1.5px solid transparent; flex: none; background: #fff; }
-    .who { font-weight: 600; }
-    .sep { opacity: .4; }
-    .what { opacity: .78; font-variant-numeric: tabular-nums; }
+    .identity {
+      box-sizing: border-box; display: inline-grid; place-items: center; flex: none;
+      border: 1.5px solid var(--c);
+      background: color-mix(in srgb, var(--c) 18%, #fff);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 16%, transparent);
+    }
+    .identity.circle { border-radius: 50%; }
+    .identity.square { border-radius: 7px; }
+    .identity .ava { border-radius: 50%; border: 0; flex: none; background: #fff; }
+    .who { font-weight: 700; letter-spacing: -.01em; }
+    .state {
+      display: inline-flex; align-items: center; gap: 4px; flex: none;
+      color: var(--muted); font-size: 10px; font-weight: 650;
+    }
+    .state .cue { width: 6px; height: 6px; background: var(--c); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 20%, transparent); }
+    .state .cue.circle { border-radius: 50%; }
+    .state .cue.square { border-radius: 1.5px; }
+    .state.idle { color: #94a3b8; }
+    .state.idle .cue { background: #94a3b8; box-shadow: none; }
+    .sep { color: #64748b; }
+    .what { color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
 
     .card {
-      width: 300px; max-width: calc(100vw - 40px);
-      border-radius: 14px; overflow: hidden;
-      background: rgba(24,24,27,.92); color: #f2f2f2;
-      -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
-      box-shadow: 0 12px 40px rgba(0,0,0,.3), 0 2px 8px rgba(0,0,0,.15);
-      animation: hcIn .22s cubic-bezier(.2,.8,.3,1);
+      width: 320px; max-width: calc(100vw - 36px);
+      border-radius: 16px; overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--c) 34%, rgba(255,255,255,.12));
+      background: color-mix(in srgb, var(--panel) 96%, var(--c)); color: var(--text);
+      -webkit-backdrop-filter: blur(16px) saturate(1.18); backdrop-filter: blur(16px) saturate(1.18);
+      box-shadow: 0 18px 48px rgba(15,23,42,.34), 0 4px 12px rgba(15,23,42,.2);
+      animation: abIn .22s cubic-bezier(.16,1,.3,1);
     }
     .card .head {
-      display: flex; align-items: center; gap: 7px;
-      padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.07);
+      display: flex; align-items: center; gap: 9px;
+      min-height: 38px; padding: 10px 12px;
+      background: color-mix(in srgb, var(--panel-2) 92%, var(--c));
+      border-bottom: 1px solid rgba(255,255,255,.08);
     }
-    .card .head .code { opacity: .45; font-size: 11px; font-variant-numeric: tabular-nums; }
+    .card .head .code {
+      color: var(--subtle); font-size: 10px; font-variant-numeric: tabular-nums;
+      padding: 2px 6px; border-radius: 999px; background: rgba(255,255,255,.06);
+    }
+    .card .head .connected { margin-left: auto; }
     .card .head .fold {
-      margin-left: auto; cursor: pointer; opacity: .5; padding: 0 2px;
-      background: none; border: none; color: inherit; font: inherit; font-size: 13px; line-height: 1;
+      display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; cursor: pointer;
+      border: 0; border-radius: 6px; background: transparent; color: var(--muted);
+      transition: background .15s ease, color .15s ease;
     }
-    .card .head .fold:hover { opacity: 1; }
-    .card .sec { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,.05); }
+    .card .head .fold svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .card .head .fold:hover { background: rgba(255,255,255,.12); color: #fff; }
+    .card .head .fold:focus-visible { outline: 2px solid color-mix(in srgb, var(--c) 70%, white); outline-offset: 1px; }
+    .card .sec { padding: 9px 12px 10px; border-bottom: 1px solid rgba(255,255,255,.055); }
     .card .sec:last-child { border-bottom: none; }
-    .card .lab { font-size: 10px; letter-spacing: .8px; opacity: .45; margin-bottom: 3px; }
-    /* agent 说的话和扩展观察到的事实分开呈现：前者带引用边，后者平铺。
-       这条分界和 ask 的 facts 盒是同一个思路——正文可能被注入，事实是我们自己看到的 */
-    .card .intent { border-left: 2px solid var(--c, #888); padding-left: 8px; opacity: .92; }
-    .card .intent .ago { opacity: .45; font-size: 10px; margin-left: 6px; }
-    .card .now { display: flex; align-items: center; gap: 6px; }
-    .card .now .pulse { width: 6px; height: 6px; border-radius: 50%; flex: none; animation: hcPulse 1.6s ease-in-out infinite; }
-    @keyframes hcPulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
-    .card .plan { opacity: .75; }
-    .card .tl { max-height: 132px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-    .card .tl .row { display: flex; gap: 8px; font-size: 11px; opacity: .62; }
-    .card .tl .row:first-child { opacity: .95; }
-    .card .tl .ago { flex: none; width: 44px; text-align: right; font-variant-numeric: tabular-nums; opacity: .7; }
+    .card .lab { font-size: 10px; letter-spacing: .07em; color: var(--subtle); margin-bottom: 5px; }
+    /* agent 说的话和扩展观察到的事实分开呈现。意图用有界色面而非粗色边，
+       在不同身份色下都更稳定，也不误装成警告。 */
+    .card .intent {
+      padding: 6px 8px; border-radius: 8px;
+      background: color-mix(in srgb, var(--c) 12%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 24%, transparent);
+      color: #e2e8f0;
+    }
+    .card .intent .ago { color: var(--subtle); font-size: 10px; margin-left: 6px; }
+    .card .now { display: flex; align-items: center; gap: 7px; color: #f8fafc; }
+    .card .now .pulse { width: 7px; height: 7px; border-radius: 50%; flex: none; animation: abPulse 1.6s ease-in-out infinite; }
+    @keyframes abPulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+    .card .plan { color: var(--muted); }
+    .card .tl {
+      max-height: 138px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
+      scrollbar-color: rgba(148,163,184,.55) transparent; scrollbar-width: thin;
+    }
+    .card .tl .row { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: var(--subtle); }
+    .card .tl .row:first-child { color: #e2e8f0; }
+    .card .tl .ago { flex: none; width: 44px; text-align: right; font-variant-numeric: tabular-nums; color: #94a3b8; }
+    .card .tl .row .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .card .tl .row .dur { flex: none; margin-left: auto; color: #64748b; font-size: 10px; font-variant-numeric: tabular-nums; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .edge, .cursor, .chip { transition-duration: .01ms !important; }
+      .cursor .glow, .cursor .ring, .cursor.bob svg, .card .now .pulse,
+      .ask .head .dot { animation: none !important; }
+    }
 
     /* ---- ask：人工介入。刻意做成浮条不是遮罩——用户正被请求去操作页面，页面必须能点 ---- */
     .ask {
@@ -213,7 +289,7 @@
       background: #fff; color: #1a1a1a; border-radius: 14px;
       box-shadow: 0 12px 40px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.08);
       border: 1px solid rgba(0,0,0,.08); font-size: 14px;
-      overflow: hidden; animation: hcIn .22s cubic-bezier(.2,.8,.3,1);
+      overflow: hidden; animation: abIn .22s cubic-bezier(.16,1,.3,1);
       pointer-events: auto;
     }
     .ask .head {
@@ -221,7 +297,7 @@
       padding: 13px 16px; background: linear-gradient(135deg,#fff7ed,#ffedd5);
       border-bottom: 1px solid rgba(0,0,0,.06); font-weight: 600; font-size: 14px;
     }
-    .ask .head .dot { width: 8px; height: 8px; background: #f97316; animation: hcPulse 1.6s ease-in-out infinite; }
+    .ask .head .dot { width: 8px; height: 8px; background: #f97316; animation: abPulse 1.6s ease-in-out infinite; }
     .ask .body { padding: 14px 16px 4px; white-space: pre-wrap; word-break: break-word; }
     .ask .note { width: 100%; box-sizing: border-box; margin: 10px 0 2px; padding: 8px 10px;
                  border: 1px solid #e2e2e2; border-radius: 8px; font: inherit; font-size: 13px;
@@ -258,39 +334,112 @@
 
   // ---------- host ----------
 
+  // 不用 innerHTML：Gmail 等站点启用了 require-trusted-types-for 'script'，
+  // 即便模板完全静态，向 Element.innerHTML 赋字符串也会直接抛异常。呈现层一旦
+  // 在 ensureHost 里中断，边框、驾驶舱和消息回执会一起消失，background 后续
+  // 重注又会被文件顶部的 __abMark 守卫短路。统一用 DOM API 构建可跨站运行。
+  const svgEl = (tag, attrs = {}) => {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+    return node;
+  };
+
   function ensureHost() {
     if (host) return;
     // z-index 顶格：ask 并进来之后这个 host 不再是纯装饰层——「需要确认」的
     // 浮条绝不能被页面自己的最高层弹窗盖住（支付确认被遮住=没有确认）。
     // 边框和光标跟着顶格没有代价，它们 pointer-events:none。
+    // 必须显式锚定到视口左上角 (top:0; left:0; width:0; height:0; pointer-events:none)：
+    // 否则在高度达数千像素的长页面（如 B 站）上，all:initial 会让 host 的静态位置沦陷在
+    // 页面流的最底部（如 y=2800px+），导致内部 fixed 浮层被错误锚定到屏幕视口之外。
     host = document.createElement('div');
-    host.style.cssText = 'all:initial;position:fixed;z-index:2147483647';
+    host.style.cssText = 'all:initial;position:fixed;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483647';
     const root = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = CSS;
     wrap = document.createElement('div');
     wrap.className = 'wrap';
-    // 骨架是静态模板，动态内容全走 textContent（铁律 2）
-    wrap.innerHTML = '<div class="edge t"></div><div class="edge b"></div>'
-      + '<div class="edge l"></div><div class="edge r"></div>'
-      + '<div class="cursor"><div class="glow"></div>'
-      + '<svg width="26" height="26" viewBox="0 0 26 26">'
-      + '<path d="M4 2 L4 21 L9 16.5 L12.5 24 L16 22.3 L12.5 15 L19 15 Z" fill="#fff" stroke="var(--c)" stroke-width="1.6" stroke-linejoin="round"/>'
-      + '</svg></div>'
-      // own 装会话胶囊/卡片，ask 直接挂在 dock 下。分开是为了重画会话区时
-      // 不动 ask 节点——它有输入框，挪一下用户打了一半的字就丢焦点
-      + '<div class="dock"><div class="own"></div></div>';
+
+    for (const side of ['t', 'b', 'l', 'r']) {
+      const edge = document.createElement('div');
+      edge.className = `edge ${side}`;
+      wrap.appendChild(edge);
+    }
+
+    const cursor = document.createElement('div');
+    cursor.className = 'cursor';
+    const glow = document.createElement('div');
+    glow.className = 'glow';
+    const pointer = svgEl('svg', { width: '27', height: '27', viewBox: '0 0 26 26', 'aria-hidden': 'true' });
+    pointer.appendChild(svgEl('path', {
+      d: 'M4 2 L4 21.5 L9.2 16.8 L12.8 24.5 L16.5 22.8 L12.9 15.2 L19.8 15.2 Z',
+      fill: '#fff', stroke: 'var(--c)', 'stroke-width': '2.1', 'stroke-linejoin': 'round',
+    }));
+    cursor.append(glow, pointer);
+    wrap.appendChild(cursor);
+
+    // own 装会话胶囊/卡片，ask 直接挂在 dock 下。分开是为了重画会话区时
+    // 不动 ask 节点——它有输入框，挪一下用户打了一半的字就丢焦点。
+    dock = document.createElement('div');
+    dock.className = 'dock';
+    dock.addEventListener('mouseenter', () => cancelTeardown());
+    dock.addEventListener('mouseleave', () => { if (!owners.length && !expanded) scheduleTeardown(); });
+    const own = document.createElement('div');
+    own.className = 'own';
+    dock.appendChild(own);
+    wrap.appendChild(dock);
     root.append(style, wrap);
     document.documentElement.appendChild(host);
     if (stealthed) host.style.visibility = 'hidden';
+    window.addEventListener('resize', onResize);
     watchContext();
+  }
+
+  // 窗口尺寸变化时，休眠光标自动重算停靠位置，防止小屏/分屏时漂移出窗外
+  function onResize() {
+    if (!wrap) return;
+    const c = wrap.querySelector('.cursor');
+    if (c && c.classList.contains('doze')) {
+      const p = dozeSpot();
+      moveCursor(p.x, p.y);
+    }
   }
 
   // host 只在「既没有主、也没有挂着的 ask」时才拆——ask 是功能件不是装饰件，
   // 用户把标记开关关掉（收到 clear）时它必须还在。
+  let lastOwners = [];
+  let teardownTimer = null;
+  let fadeTimer = null;
+
+  function cancelTeardown() {
+    if (teardownTimer) { clearTimeout(teardownTimer); teardownTimer = null; }
+    if (fadeTimer) { clearTimeout(fadeTimer); fadeTimer = null; }
+    if (dock) { dock.style.opacity = '1'; dock.style.transition = 'opacity .2s ease'; }
+  }
+
+  function scheduleTeardown() {
+    if (owners.length || expanded || !lastOwners.length || askSettle || teardownTimer) return;
+    fadeTimer = setTimeout(() => {
+      if (dock) {
+        dock.style.transition = 'opacity .6s ease';
+        dock.style.opacity = '0';
+      }
+    }, 7400);
+    teardownTimer = setTimeout(() => {
+      lastOwners = [];
+      teardownTimer = null;
+      fadeTimer = null;
+      maybeTeardown();
+    }, 8000);
+  }
+
   function maybeTeardown() {
     if (owners.length || askSettle) return;
-    if (host) { host.remove(); host = null; wrap = null; }
+    if (teardownTimer) { clearTimeout(teardownTimer); teardownTimer = null; }
+    if (fadeTimer) { clearTimeout(fadeTimer); fadeTimer = null; }
+    lastOwners = [];
+    window.removeEventListener('resize', onResize);
+    if (host) { host.remove(); host = null; wrap = null; dock = null; }
     for (const s of actState.values()) clearTimeout(s.timer);
     actState.clear();
     if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
@@ -339,13 +488,28 @@
 
   function render() {
     if (!TOP) return;
-    if (!owners.length && !askSettle) return maybeTeardown();
+    if (!owners.length && !lastOwners.length && !askSettle) return maybeTeardown();
     ensureHost();
 
-    const paint = owners.length ? edgePaint() : '';
+    if (owners.length) {
+      lastOwners = [...owners];
+      cancelTeardown();
+    } else if (expanded) {
+      // 展开查看面板时永不自动淡出销毁，避免阅读时间线时面板突然消失
+      cancelTeardown();
+    } else {
+      // 方案 A（自动延时淡出）：断开连接且处于收起状态时，保留「已完成」胶囊 8 秒后平滑淡出
+      scheduleTeardown();
+    }
+
+    const isIdle = !owners.length && lastOwners.length > 0;
+    const currentOwners = owners.length ? owners : lastOwners;
+
+    // 断开后立刻隐藏四周边框（不再处于活跃操控），仅保留右下角胶囊提示
+    const paint = (!isIdle && owners.length) ? edgePaint() : '';
     wrap.querySelectorAll('.edge').forEach((e) => {
       e.style.background = paint;
-      e.style.display = owners.length ? '' : 'none';
+      e.style.display = (!isIdle && owners.length) ? '' : 'none';
     });
 
     // 会话区每条 set 消息整个重画。频率是「每条命令一次」，量级远够不着
@@ -353,8 +517,8 @@
     // 的高发地。ask 节点不在这个区里，完全不被触碰。
     const own = wrap.querySelector('.own');
     own.textContent = '';
-    for (const o of owners) {
-      own.appendChild(expanded ? buildCard(o) : buildChip(o));
+    for (const o of currentOwners) {
+      own.appendChild(expanded ? buildCard(o, isIdle) : buildChip(o, isIdle));
     }
 
     // 时间线的相对时间要走字——只在展开时付这个定时器
@@ -364,36 +528,61 @@
     syncCursorIdle();
   }
 
-  function buildChip(o) {
-    const chip = document.createElement('div');
+  function buildChip(o, isIdle = false) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
     chip.className = 'chip';
+    chip.style.setProperty('--c', o.color);
+    chip.title = isIdle ? `${o.label} 操作已完成` : '展开 chrome-agent-browser 控制面板';
+    chip.setAttribute('aria-label', `${o.label} ${isIdle ? '已完成此页面操作' : '正在控制此页面'}，展开详情`);
     const act = actState.get(o.sid);
-    if (act) chip.classList.add('act');
-    const av = avatarCanvas(18); av.style.borderColor = o.color;
+    if (act && !isIdle) chip.classList.add('act');
+    const av = identityBadge(o, 24);
     const who = document.createElement('span'); who.className = 'who'; who.textContent = o.label;
+    const state = document.createElement('span'); state.className = 'state' + (isIdle ? ' idle' : '');
+    const cue = document.createElement('span'); cue.className = `cue ${o.shape === 'square' ? 'square' : 'circle'}`;
+    const stateText = document.createElement('span');
+    stateText.textContent = isIdle ? '已完成' : (act ? '控制中' : '已连接');
+    state.append(cue, stateText);
     const sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '·';
     const what = document.createElement('span'); what.className = 'what';
-    // 空闲时 label 比进程短码有信息量得多：「客户资料-录入」 vs 「p48291」
-    what.textContent = act ? act.text : (tabLabel || o.code);
-    chip.append(av, who, sep, what);
-    chip.addEventListener('click', () => setExpanded(true));
+    const st = stats[o.sid];
+    if (isIdle) {
+      what.textContent = st && st.steps > 0
+        ? `已完成 · 共 ${st.steps} 步 (${st.durationSec}s)`
+        : (tabLabel || '任务已完成');
+    } else {
+      what.textContent = act ? act.text : (tabLabel || o.code);
+    }
+    chip.append(av, who, state, sep, what);
+    chip.addEventListener('click', (e) => { e.stopPropagation(); setExpanded(true); });
     return chip;
   }
 
-  function buildCard(o) {
+  function buildCard(o, isIdle = false) {
     const card = document.createElement('div');
     card.className = 'card';
     card.style.setProperty('--c', o.color);
 
     const head = document.createElement('div');
     head.className = 'head';
-    const av = avatarCanvas(20); av.style.borderColor = o.color;
+    const av = identityBadge(o, 26);
     const who = document.createElement('span'); who.className = 'who'; who.textContent = o.label;
     const code = document.createElement('span'); code.className = 'code'; code.textContent = o.code;
-    const fold = document.createElement('button'); fold.className = 'fold'; fold.textContent = '⌄';
-    fold.title = '收起';
-    fold.addEventListener('click', () => setExpanded(false));
-    head.append(av, who, code, fold);
+    const connected = document.createElement('span'); connected.className = 'state connected' + (isIdle ? ' idle' : '');
+    const cue = document.createElement('span'); cue.className = `cue ${o.shape === 'square' ? 'square' : 'circle'}`;
+    const connectedText = document.createElement('span');
+    const act = actState.get(o.sid);
+    connectedText.textContent = isIdle ? '已完成' : (act ? '执行中' : '已就绪');
+    if (act && !isIdle) connected.classList.add('act');
+    connected.append(cue, connectedText);
+    const fold = document.createElement('button'); fold.className = 'fold'; fold.type = 'button';
+    fold.title = '收起'; fold.setAttribute('aria-label', '收起控制面板');
+    const foldIcon = svgEl('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' });
+    foldIcon.appendChild(svgEl('path', { d: 'M4 6l4 4 4-4' }));
+    fold.appendChild(foldIcon);
+    fold.addEventListener('click', (e) => { e.stopPropagation(); setExpanded(false); });
+    head.append(av, who, code, connected, fold);
     card.appendChild(head);
 
     const sec = (label) => {
@@ -409,17 +598,25 @@
 
     // 本页：agent 开页时声明的这条工作线。也是 agent 写的（铁律2：textContent）。
     if (tabLabel) {
-      const s = sec('本页');
+      const s = sec('本页任务');
       const p2 = document.createElement('div'); p2.className = 'plan';
       p2.textContent = tabLabel;
       s.appendChild(p2);
+    }
+
+    const st = stats[o.sid];
+    if (isIdle && st && st.steps > 0) {
+      const s = sec('本轮任务总结');
+      const p = document.createElement('div'); p.className = 'plan';
+      p.textContent = `执行完毕：共完成 ${st.steps} 步操作，累计耗时 ${st.durationSec} 秒。`;
+      s.appendChild(p);
     }
 
     // 准备做：agent 自己声明的计划。它是 agent 写的（可能源自被注入的页面），
     // 所以带引用边、标时间，和下面扩展观察到的事实在视觉上分开。
     const intent = intents[o.sid];
     if (intent?.text) {
-      const s = sec('准备做');
+      const s = sec('声明意图');
       const q = document.createElement('div'); q.className = 'intent';
       q.textContent = intent.text;
       const ago = document.createElement('span'); ago.className = 'ago'; ago.textContent = relTime(intent.t);
@@ -430,15 +627,14 @@
     // 接下来：批处理里还没跑到的步骤。这是扩展从 act 的 steps 里读到的事实，
     // 不需要 agent 配合就有。
     if (plan.length) {
-      const s = sec('接下来');
+      const s = sec('待执行步骤');
       const p = document.createElement('div'); p.className = 'plan';
       p.textContent = plan.slice(0, 3).join(' → ') + (plan.length > 3 ? ` →（还有 ${plan.length - 3} 步）` : '');
       s.appendChild(p);
     }
 
-    const act = actState.get(o.sid);
     if (act) {
-      const s = sec('正在做');
+      const s = sec('实时动作');
       const n = document.createElement('div'); n.className = 'now';
       const pulse = document.createElement('span'); pulse.className = 'pulse'; pulse.style.background = o.color;
       const t = document.createElement('span'); t.textContent = act.text;
@@ -448,13 +644,18 @@
 
     const rows = logs[o.sid] || [];
     if (rows.length) {
-      const s = sec('时间线');
+      const s = sec('执行流水');
       const tl = document.createElement('div'); tl.className = 'tl';
       for (const r of rows.slice(0, 12)) {
         const row = document.createElement('div'); row.className = 'row';
         const ago = document.createElement('span'); ago.className = 'ago'; ago.textContent = relTime(r.t);
-        const txt = document.createElement('span'); txt.textContent = r.text;
+        const txt = document.createElement('span'); txt.className = 'txt'; txt.textContent = r.summary || r.text;
         row.append(ago, txt);
+        if (typeof r.ms === 'number') {
+          const dur = document.createElement('span'); dur.className = 'dur';
+          dur.textContent = r.ms >= 1000 ? `${(r.ms / 1000).toFixed(1)}s` : `${r.ms}ms`;
+          row.appendChild(dur);
+        }
         tl.appendChild(row);
       }
       s.appendChild(tl);
@@ -464,6 +665,7 @@
 
   function setExpanded(on) {
     expanded = !!on;
+    cancelTeardown();
     try { chrome.storage.local.set({ dockOpen: expanded }); } catch { /* context 正在失效 */ }
     render();
   }
@@ -471,7 +673,7 @@
   // ---------- 虚拟光标 ----------
   //
   // content.js 与本文件同处一个 isolated world，动作坐标在那边解析元素时
-  // 就地传过来（window.__hcCursor），零消息往返、零延迟。真实点击(L2)和
+  // 就地传过来（window.__abCursor），零消息往返、零延迟。真实点击(L2)和
   // 合成点击(L1)都先过 locate，所以两条路的光标一致。
   //
   // 顺路兼任「让路」职责：坐标落在驾驶舱底下时把它瞬间变成 pointer-events:none。
@@ -514,7 +716,7 @@
     dodgeTimer = setTimeout(() => wrap && dock.classList.remove('dodge'), 1600);
   }
 
-  window.__hcCursor = (x, y, kind) => {
+  window.__abCursor = (x, y, kind) => {
     if (!TOP || !wrap || !owners.length) return;
     const c = wrap.querySelector('.cursor');
     c.classList.add('on');
@@ -583,19 +785,28 @@
 
     askEl = document.createElement('div');
     askEl.className = 'ask';
-    askEl.innerHTML = `
-      <div class="head"><span class="dot"></span><span class="t"></span></div>
-      <div class="body"><span class="p"></span></div>
-      <div class="foot">
-        <span class="clock"></span>
-        <button class="no">取消</button>
-        <button class="ok">我完成了</button>
-      </div>`;
-    // 文案一律走 textContent，绝不拼进 innerHTML——prompt 是从 agent 那边传过来的，
+    askEl.setAttribute('role', 'dialog');
+    askEl.setAttribute('aria-live', 'polite');
+
+    const askHead = document.createElement('div'); askHead.className = 'head';
+    const askDot = document.createElement('span'); askDot.className = 'dot';
+    const askTitle = document.createElement('span'); askTitle.className = 't';
+    askHead.append(askDot, askTitle);
+    const askBody = document.createElement('div'); askBody.className = 'body';
+    const askPrompt = document.createElement('span'); askPrompt.className = 'p';
+    askBody.appendChild(askPrompt);
+    const askFoot = document.createElement('div'); askFoot.className = 'foot';
+    const askClock = document.createElement('span'); askClock.className = 'clock';
+    const askNo = document.createElement('button'); askNo.className = 'no'; askNo.textContent = '取消';
+    const askOk = document.createElement('button'); askOk.className = 'ok'; askOk.textContent = '我完成了';
+    askFoot.append(askClock, askNo, askOk);
+    askEl.append(askHead, askBody, askFoot);
+
+    // 文案一律走 textContent——prompt 是从 agent 那边传过来的，
     // 而 agent 的内容可能源自页面（也就是可能被注入）。这里是最后一道
     // 「数据不当代码用」的边界。
-    askEl.querySelector('.head').prepend(avatarCanvas(20));   // 是花叔的分身在请你搭把手
-    askEl.querySelector('.t').textContent = msg.title || 'huashu-chrome 需要你搭把手';
+    askEl.querySelector('.head').prepend(avatarCanvas(20));
+    askEl.querySelector('.t').textContent = msg.title || 'chrome-agent-browser 需要你协助';
     askEl.querySelector('.p').textContent = msg.prompt || '';
     if (msg.danger) askEl.classList.add('danger');
     if (msg.okText) askEl.querySelector('.ok').textContent = msg.okText;
@@ -701,13 +912,14 @@
   }
 
   chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
-    if (msg && msg.__hcMark !== undefined) {
+    if (msg && msg.__abMark !== undefined) {
       // 非顶层框架照样要应答 ping，否则 background 会以为脚本没注入，
       // 于是每条命令都重注一次
-      if (msg.__hcMark === 'ping') { sendResponse({ pong: true, top: TOP }); return true; }
-      if (msg.__hcMark === 'set') {
+      if (msg.__abMark === 'ping') { sendResponse({ pong: true, top: TOP }); return true; }
+      if (msg.__abMark === 'set') {
         logs = msg.logs || {};
         intents = msg.intents || {};
+        stats = msg.stats || {};
         plan = Array.isArray(msg.plan) ? msg.plan : [];
         tabLabel = typeof msg.tabLabel === 'string' ? msg.tabLabel : '';
         owners = Array.isArray(msg.owners) ? msg.owners.filter((o) => o && o.sid) : [];
@@ -720,15 +932,15 @@
       // clear 走完整 render 而不是直接 teardown：ask 还挂着时 host 必须留下，
       // 但边框/胶囊/标题这些「存在感」要立刻消失——直接拆会因 ask 在场而早退，
       // 留一屏已经没主的标记
-      if (msg.__hcMark === 'clear') { owners = []; plan = []; render(); sendResponse({ ok: true }); return true; }
-      if (msg.__hcMark === 'stealth') { setStealth(msg.on); sendResponse({ ok: true }); return true; }
+      if (msg.__abMark === 'clear') { owners = []; lastOwners = []; plan = []; render(); sendResponse({ ok: true }); return true; }
+      if (msg.__abMark === 'stealth') { setStealth(msg.on); sendResponse({ ok: true }); return true; }
       return;
     }
-    if (msg && msg.__hcAsk !== undefined) {
+    if (msg && msg.__abAsk !== undefined) {
       // show 立即返回，不攥着 sendResponse 等人——见 closeAsk 上面那段
-      if (msg.__hcAsk === 'show') { showAsk(msg); sendResponse({ shown: true }); return true; }
-      if (msg.__hcAsk === 'poll') { sendResponse(askOutcome || { pending: true }); return true; }
-      if (msg.__hcAsk === 'flash') {
+      if (msg.__abAsk === 'show') { showAsk(msg); sendResponse({ shown: true }); return true; }
+      if (msg.__abAsk === 'poll') { sendResponse(askOutcome || { pending: true }); return true; }
+      if (msg.__abAsk === 'flash') {
         const els = (msg.selectors || []).map((s) => {
           try { return document.querySelector(s); } catch { return null; }
         }).filter(Boolean);
@@ -737,7 +949,7 @@
         sendResponse({ matched: els.length });
         return true;
       }
-      if (msg.__hcAsk === 'abort') { closeAsk('cancelled', '被 agent 取消'); sendResponse({ ok: true }); return true; }
+      if (msg.__abAsk === 'abort') { closeAsk('cancelled', '被 agent 取消'); sendResponse({ ok: true }); return true; }
     }
   });
 

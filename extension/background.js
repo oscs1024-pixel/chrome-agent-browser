@@ -11,7 +11,7 @@
 import * as cdp from './cdp.js';
 import { matchChallenge, hostOf, hostMatches, L2_ORIGINS_SEED } from './risk.js';
 import { CRED_URL, redactCreds } from './redact.js';
-import { identityOf, stripMarkPrefix } from './identity.js';
+import { identityOf } from './identity.js';
 import { validateScript, condText, repeatMax, EXEC_BUDGET } from './script.js';
 
 // ---------- 连接层 ----------
@@ -66,7 +66,7 @@ async function ensureOffscreen() {
 
 async function toBridge(msg) {
   if (await ensureOffscreen()) {
-    const r = await chrome.runtime.sendMessage({ __hcBridge: 'out', msg }).catch(() => null);
+    const r = await chrome.runtime.sendMessage({ __abBridge: 'out', msg }).catch(() => null);
     if (r?.sent) return;
   }
   if (directSend(msg)) return;   // offscreen 没建起来，或者它手上那条 socket 断了
@@ -118,7 +118,7 @@ async function connState() {
   if (directWs?.readyState === 1 && Date.now() - directLastRx <= DIRECT_DEAD_MS) {
     return { connected: true, lastRx: directLastRx, bridge: directBridgeVersion, leg: 'direct' };
   }
-  const r = await chrome.runtime.sendMessage({ __hcBridge: 'status' }).catch(() => null);
+  const r = await chrome.runtime.sendMessage({ __abBridge: 'status' }).catch(() => null);
   return { connected: !!r?.connected, lastRx: r?.lastRx || directLastRx || 0, bridge: r?.bridge || '', leg: 'offscreen', offscreenError: offscreenFailed };
 }
 
@@ -129,8 +129,8 @@ function noteBridgeVersion(v) {
   const mine = chrome.runtime.getManifest().version;
   bridgeMismatch = v === mine ? '' : v;
   chrome.action.setTitle({ title: bridgeMismatch
-    ? `huashu-chrome：扩展 v${mine} 和桥 v${v} 版本不一致，去 chrome://extensions 重载一次`
-    : 'huashu-chrome' });
+    ? `chrome-agent-browser：扩展 v${mine} 和桥 v${v} 版本不一致，去 chrome://extensions 重载一次`
+    : 'chrome-agent-browser' });
   setBadge(true);
 }
 
@@ -160,13 +160,14 @@ let iidCache = null;
 async function instanceId() {
   if (iidCache) return iidCache;
   try {
-    const { hcInstanceId } = await chrome.storage.local.get('hcInstanceId');
-    if (hcInstanceId) return (iidCache = hcInstanceId);
-    const fresh = crypto.randomUUID();
-    await chrome.storage.local.set({ hcInstanceId: fresh });
+    const { abInstanceId } = await chrome.storage.local.get('abInstanceId');
+    if (abInstanceId) return (iidCache = abInstanceId);
+    const fresh = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `ab-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await chrome.storage.local.set({ abInstanceId: fresh });
     return (iidCache = fresh);
   } catch {
-    return null;   // 拿不到就退回桥那侧的老行为（按扩展 id 替换），不阻断连接
+    const fresh = `ab-mem-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return (iidCache = fresh);
   }
 }
 
@@ -189,49 +190,55 @@ function directSend(msg) {
 // 谁都没在干活，而扩展看起来一切正常。
 //
 // 交接改成显式的：offscreen 一旦真的连上会发 'up'，SW 收到就把自己这条关掉。
+let directConnecting = false;
 async function directConnect() {
-  if (directWs && directWs.readyState <= 1) return;
-  // 两条腿必须报同一个 instanceId：桥认的是实例不是连接，报岔了
-  // 就会被当成两个 Chrome 并存，谁也不替换谁。
-  const iid = await instanceId();
-  for (const port of PORTS) {
-    try {
-      directWs = await new Promise((resolve, reject) => {
-        const sock = new WebSocket(`ws://127.0.0.1:${port}`);
-        const t = setTimeout(() => { sock.close(); reject(new Error('timeout')); }, 1500);
-        sock.onopen = () => sock.send(JSON.stringify({
-          type: 'hello', role: 'extension', extId: chrome.runtime.id,
-          version: chrome.runtime.getManifest().version,
-          instanceId: iid, headless: isHeadless(),
-          chrome: (navigator.userAgent.match(/Chrome\/([\d.]+)/) || [])[1], v: 1,
-        }));
-        sock.onmessage = (ev) => {
-          const m = JSON.parse(ev.data);
-          if (m.type !== 'welcome') { clearTimeout(t); sock.close(); return reject(new Error('rejected')); }
-          clearTimeout(t);
-          directLastRx = Date.now();
-          directBridgeVersion = String(m.bridge || '');
-          sock.onmessage = (e) => {
+  if (directConnecting || (directWs && directWs.readyState <= 1)) return;
+  directConnecting = true;
+  try {
+    // 两条腿必须报同一个 instanceId：桥认的是实例不是连接，报岔了
+    // 就会被当成两个 Chrome 并存，谁也不替换谁。
+    const iid = await instanceId();
+    for (const port of PORTS) {
+      try {
+        directWs = await new Promise((resolve, reject) => {
+          const sock = new WebSocket(`ws://127.0.0.1:${port}`);
+          const t = setTimeout(() => { sock.close(); reject(new Error('timeout')); }, 1500);
+          sock.onopen = () => sock.send(JSON.stringify({
+            type: 'hello', role: 'extension', extId: chrome.runtime.id,
+            version: chrome.runtime.getManifest().version,
+            instanceId: iid, headless: isHeadless(),
+            chrome: (navigator.userAgent.match(/Chrome\/([\d.]+)/) || [])[1], v: 1,
+          }));
+          sock.onmessage = (ev) => {
+            const m = JSON.parse(ev.data);
+            if (m.type !== 'welcome') { clearTimeout(t); sock.close(); return reject(new Error('rejected')); }
+            clearTimeout(t);
             directLastRx = Date.now();
-            const x = JSON.parse(e.data);
-            if (x.type === 'pong') return;
-            if (x.type === 'ping') { if (sock.readyState === 1) sock.send(JSON.stringify({ type: 'pong' })); return; }
-            onMessage(x);
+            directBridgeVersion = String(m.bridge || '');
+            sock.onmessage = (e) => {
+              directLastRx = Date.now();
+              const x = JSON.parse(e.data);
+              if (x.type === 'pong') return;
+              if (x.type === 'ping') { if (sock.readyState === 1) sock.send(JSON.stringify({ type: 'pong' })); return; }
+              onMessage(x);
+            };
+            sock.onclose = () => { directWs = null; stopDirectPing(); setBadge(false); };
+            sock.onerror = () => {};
+            resolve(sock);
           };
-          sock.onclose = () => { directWs = null; stopDirectPing(); setBadge(false); };
-          sock.onerror = () => {};
-          resolve(sock);
-        };
-        sock.onerror = () => { clearTimeout(t); reject(new Error('error')); };
-      });
-      startDirectPing();
-      setBadge(true);
-      noteBridgeVersion(directBridgeVersion);
-      void flushOutbox(async (m) => { if (directWs?.readyState === 1) directWs.send(JSON.stringify(m)); });
-      return;
-    } catch { /* 换下一个端口 */ }
+          sock.onerror = () => { clearTimeout(t); reject(new Error('error')); };
+        });
+        startDirectPing();
+        setBadge(true);
+        noteBridgeVersion(directBridgeVersion);
+        void flushOutbox(async (m) => { if (directWs?.readyState === 1) directWs.send(JSON.stringify(m)); });
+        return;
+      } catch { /* 换下一个端口 */ }
+    }
+    setBadge(false);
+  } finally {
+    directConnecting = false;
   }
-  setBadge(false);
 }
 
 // 兜底腿也要验回音，理由和 offscreen 那条腿完全一样：半开时 readyState
@@ -289,14 +296,14 @@ const NO_SLOT_CMDS = new Set(['tabs', 'download', 'reload', 'status']);
 async function onMessage(msg) {
   if (msg.type === 'event') return onBridgeEvent(msg);
   if (msg.type !== 'cmd') return;
+  const startedAt = Date.now();
   try {
     const handler = HANDLERS[msg.cmd];
     if (!handler) throw err('INTERNAL', `未知命令 ${msg.cmd}`);
     // await 而不是 void：标记那一侧只信 storage 里的名单（见 syncMark 上的说明），
     // 这里必须保证「本命令携带的名单已落盘」先于命令完成后的刷新，否则新会话的
     // 第一条命令刷标记时会读到没有自己的旧名单——正是当年那个落盘竞态
-    // 显示名优先用桥盖的 label（宿主自报的真名，见 src/lib/host.js）；
-    // 老桥不盖 label 就退回 client slug，identity.js 会把它机械美化。
+    // 显示名优先使用桥提供的 label；未知宿主使用稳定 client slug。
     await noteSession(msg.sid, msg.label || msg.client, msg.live);
     // 缺省 tabId 在这里统一解析成具体 tabId（会话级槽），handler 拿到的永远是实值。
     // ctx 只在本函数内现场传——SW 里两条命令的 await 会交错，绝不能用模块级变量存「当前消息」
@@ -306,14 +313,9 @@ async function onMessage(msg) {
     // 户口簿反推归属，登记必须先落盘，否则第一条命令刷不出标记（又一个落盘竞态）
     if (tabId && msg.sid && !NO_SLOT_CMDS.has(msg.cmd)) await registerTab(msg.sid, tabId);
     let data = await handler(msg.params || {}, tabId, ctx);
-    // 命令跑完才刷标记，不是跑之前：导航会把页面里的 mark.js 冲掉，
-    // 提前贴的那一次多半活不到用户看见。act 顺路带上，一次消息两件事。
-    // 这里**不带 msg.live**：它是命令出发时的快照。命令在途时用户关掉终端，
-    // 桥的 sessions 事件已经摘了标记，快照却还写着「他活着」——用它刷新会把
-    // 死会话的标记贴回去，而且再没有任何事件来摘（sessions 只在名单变化时推，
-    // 变化已经发生过了）。storage 里的名单永远是最新写入，信它。
+    const ms = Date.now() - startedAt;
     const marked = tabId || data?.tabId;
-    if (marked) void syncMark(marked, { sid: msg.sid, act: actText(msg.cmd, msg.params) });
+    if (marked) await syncMark(marked, { sid: msg.sid, act: actText(msg.cmd, msg.params), cmd: msg.cmd, ms, ok: true });
     // 教练搭在回执尾部。await 的代价是一次 storage 读写（约 1ms），
     // 相比它要省下的 6 秒模型回合可以忽略
     const tip = (await coachNote(msg.sid, msg.cmd)) + (await multiLineNote(msg.sid, msg.tabId, msg.cmd, tabId));
@@ -331,6 +333,10 @@ async function onMessage(msg) {
     }
     reply(msg.id, true, data, msg.__k);
   } catch (e) {
+    const ms = Date.now() - startedAt;
+    if (msg.sid) {
+      void pushActLog(msg.sid, { cmd: msg.cmd, summary: `[失败] ${actText(msg.cmd, msg.params)}`, ok: false, ms, error: e.code });
+    }
     reply(msg.id, false, { code: e.code || 'INTERNAL', message: e.message || String(e) }, msg.__k);
   }
 }
@@ -464,7 +470,7 @@ async function claimTab(sid, tabId, ctx) {
     .filter((s) => !live.has(s))
     .sort((a, b) => (all[`slotTouch:${a}`] || 0) - (all[`slotTouch:${b}`] || 0))
     .slice(0, slots.length - SLOT_CAP);
-  if (victims.length) await chrome.storage.local.remove(victims.flatMap((s) => [agentTabKey(s), `slotTouch:${s}`, `agentGroup:${s}`, regKey(s)]));
+  if (victims.length) await chrome.storage.local.remove(victims.flatMap((s) => [agentTabKey(s), `slotTouch:${s}`, `agentGroup:${s}`, regKey(s), actLogKey(s), sidClientKey(s)]));
 }
 
 // ---------- 户口簿 ----------
@@ -519,7 +525,7 @@ async function getActiveTabId(sid, ctx) {
   const { activeTabId } = await chrome.storage.local.get('activeTabId');
   if (activeTabId) {
     let tab = null;
-    try { tab = await chrome.tabs.get(activeTabId); } catch { /* 已关 */ }
+    try { tab = await chrome.tabs.get(activeTabId); } catch { await chrome.storage.local.remove('activeTabId'); }
     if (tab) {
       // 这才是「两个 agent 撞进同一个页面」唯一能拦住的地方。
       // 以前这里无条件继承，只在返回里加一句警告——而警告是在操作**已经跑完**
@@ -572,7 +578,7 @@ async function conflictNote(tabId, sid, ctx) {
 
 const LIVE_SIDS = 'liveSids';                     // storage.session：此刻还连着的会话
 const MARKED_TABS = 'markedTabs';                 // storage.session：此刻贴着标记的页
-const sidClientKey = (sid) => `sidClient:${sid}`; // storage.session：sid → client 名
+const sidClientKey = (sid) => `sidClient:${sid}`; // storage.local：sid → client 名
 
 const markEnabled = async () => !(await chrome.storage.local.get('markDisabled')).markDisabled;
 
@@ -580,9 +586,9 @@ const markEnabled = async () => !(await chrome.storage.local.get('markDisabled')
 // popup 要显示「谁在控哪一页」，而它自己够不着桥。
 async function noteSession(sid, client, live) {
   const patch = {};
-  if (sid && client) patch[sidClientKey(sid)] = client;
   if (Array.isArray(live)) patch[LIVE_SIDS] = live;
   if (Object.keys(patch).length) await chrome.storage.session.set(patch).catch(() => {});
+  if (sid && client) await chrome.storage.local.set({ [sidClientKey(sid)]: client }).catch(() => {});
 }
 
 const liveList = async () => (await chrome.storage.session.get(LIVE_SIDS))[LIVE_SIDS] || [];
@@ -601,12 +607,12 @@ async function ownersOfTab(tabId) {
   const all = await chrome.storage.local.get(null);
   const sids = sidsOnTab(all, tabId).filter((sid) => lives.has(sid));
   if (!sids.length) return [];
-  const clients = await chrome.storage.session.get(sids.map(sidClientKey));
+  const clients = await chrome.storage.local.get(sids.map(sidClientKey));
   return sids.map((sid) => identityOf(sid, clients[sidClientKey(sid)]));
 }
 
 // 判据必须是「收到了 mark.js 的回执」，不能是「sendMessage 没报错」：
-// 页面里通常已经有 content.js，它对 __hcMark 消息不作应答——这种情况下
+// 页面里通常已经有 content.js，它对 __abMark 消息不作应答——这种情况下
 // sendMessage 是 resolve(undefined) 而不是 reject 的。按「没报错就算送到」
 // 来判，标记会在每一个已注入 content.js 的页面上永远贴不上，且一声不响。
 const postMark = (tabId, msg) => chrome.tabs.sendMessage(tabId, msg).then((r) => !!r?.ok).catch(() => false);
@@ -616,18 +622,33 @@ const postMark = (tabId, msg) => chrome.tabs.sendMessage(tabId, msg).then((r) =>
 // 先发后注：稳态下页面里的 mark.js 还在，一次消息往返（约 1ms）就完事；
 // 只有导航过、脚本被冲掉时才付一次 executeScript。反过来先探活再发是两次往返，
 // 而这个函数跟在每一条命令后面跑。
-async function syncMark(tabId, { act, sid, plan } = {}) {
+async function syncMark(tabId, { act, sid, plan, cmd, ms, ok } = {}) {
   if (!tabId) return;
   try {
     if (!(await markEnabled())) return;
-    const owners = await ownersOfTab(tabId);
+    let owners = await ownersOfTab(tabId);
+    if (!owners.length && sid) {
+      const clientName = (await chrome.storage.local.get(sidClientKey(sid)))[sidClientKey(sid)];
+      owners = [identityOf(sid, clientName)];
+    }
     // 标签组跟着同一份归属关系走，但不挤在这条 await 链上：
     // 组画不上（用户正在拖标签页、旧 Chrome 没有 API）不该拖累页内标记。
     void syncGroup(tabId, owners);
-    if (act && sid) await pushActLog(sid, act);
+    if (act && sid) await pushActLog(sid, { cmd, summary: act, ms, ok });
+    const pData = await panelData(owners);
     // plan 不落盘、每次 set 都覆盖：批处理一结束它就该消失，
     // 「接下来」栏里挂着永远不会跑的步骤是在骗用户
-    const msg = { __hcMark: 'set', owners, act: act || null, sid, plan: plan || null, tabLabel: await getLabel(tabId), ...(await panelData(owners)) };
+    const msg = {
+      __abMark: 'set',
+      owners,
+      act: act || null,
+      sid,
+      plan: plan || null,
+      tabLabel: await getLabel(tabId),
+      logs: pData.logs,
+      intents: pData.intents,
+      stats: pData.stats,
+    };
     await noteMarked(tabId, owners.length > 0);
     if (await postMark(tabId, msg)) return;
     // 没人接消息 = 页面里没有 mark.js。既然这页也没有主，就别为了摘一个
@@ -638,31 +659,49 @@ async function syncMark(tabId, { act, sid, plan } = {}) {
   } catch { /* chrome:// 注不进、标签页已关、开关关了——都不是命令的错 */ }
 }
 
-// 驾驶舱时间线的原料。存这边而不是页面内存：导航会把页面里的一切冲掉，
+// 驾驶舱时间线与审计轨迹的原料。存这边而不是页面内存：导航会把页面里的一切冲掉，
 // 而「刚刚发生过什么」恰恰要跨导航活着。20 条封顶。内容是 actText 的输出——
 // 只有动词和目标，**绝不含用户输入的内容**（这些字会显示在可能正被录屏的页面上）。
 const actLogKey = (sid) => `actLog:${sid}`;
 const intentKey = (sid) => `intent:${sid}`;
 
-async function pushActLog(sid, text) {
+async function pushActLog(sid, entry) {
   const key = actLogKey(sid);
-  const { [key]: list = [] } = await chrome.storage.session.get(key);
-  list.unshift({ t: Date.now(), text: String(text).slice(0, 60) });
-  await chrome.storage.session.set({ [key]: list.slice(0, 20) });
+  const { [key]: list = [] } = await chrome.storage.local.get(key);
+  const summary = typeof entry === 'string' ? entry : (entry?.summary || entry?.text || '');
+  const rec = {
+    t: Date.now(),
+    text: String(summary).slice(0, 60),
+    summary: String(summary).slice(0, 60),
+    cmd: entry?.cmd || '',
+    ok: entry?.ok !== false,
+    ms: typeof entry?.ms === 'number' ? entry.ms : undefined,
+  };
+  list.unshift(rec);
+  await chrome.storage.local.set({ [key]: list.slice(0, 20) });
 }
 
-// 驾驶舱要展示的两样：各会话的时间线，和 agent 用 status 声明的意图。
+// 驾驶舱展示：各会话的时间线、意图声明和执行统计摘要。
 // 都按 sid 键控——同一页有两个主时，各自的账各自记。
 async function panelData(owners) {
-  const logs = {}, intents = {};
+  const logs = {}, intents = {}, stats = {};
   if (owners.length) {
-    const got = await chrome.storage.session.get(owners.flatMap((o) => [actLogKey(o.sid), intentKey(o.sid)]));
+    const got = await chrome.storage.local.get(owners.flatMap((o) => [actLogKey(o.sid), intentKey(o.sid)]));
     for (const o of owners) {
-      if (got[actLogKey(o.sid)]) logs[o.sid] = got[actLogKey(o.sid)];
+      const list = got[actLogKey(o.sid)] || [];
+      if (list.length) logs[o.sid] = list;
       if (got[intentKey(o.sid)]) intents[o.sid] = got[intentKey(o.sid)];
+
+      const totalSteps = list.length;
+      const totalMs = list.reduce((acc, it) => acc + (it.ms || 0), 0);
+      stats[o.sid] = {
+        steps: totalSteps,
+        lastAction: list[0]?.summary || list[0]?.text || '',
+        durationSec: (totalMs / 1000).toFixed(1),
+      };
     }
   }
-  return { logs, intents };
+  return { logs, intents, stats };
 }
 
 // 「此刻哪些页面上贴着标记」得自己记一笔账，不能靠槽反推。
@@ -694,11 +733,18 @@ async function noteMarked(tabId, on) {
 //    但那种碰撞的后果只是多染一个组，比拆错用户的组轻得多。
 const groupKey = (sid) => `agentGroup:${sid}`;
 
-// 组名是品牌字不是彩色圆点 emoji（花叔定的：色块图标丑）。它同时是「这个组
-// 是我们建的」的指纹。旧版组名用过身份 emoji，验指纹时兼容一阵子——
-// 不兼容的话，升级前建的组会因为指纹对不上而永远摘不掉。
-const GROUP_TITLE = '花叔';
-const groupTitleOk = (title, sid) => title === GROUP_TITLE || title === identityOf(sid).emoji;
+// 组名按「会话短码 · Agent名」格式生成，文字精确确认，颜色快速扫视。
+// 短码放前面以便在标签栏拥挤时仍可辨识。
+const groupTitleFor = (o) => {
+  const label = String(o?.label || 'AI agent').replace(/\s+/g, ' ').trim().slice(0, 18);
+  const code = String(o?.code || '').replace(/\s+/g, '').slice(-10);
+  return [code, label].filter(Boolean).join(' · ');
+};
+const groupTitleOk = (title, sid) => {
+  const t = String(title || '');
+  const id = identityOf(sid);
+  return t === id.code || t.startsWith(`${id.code} · `);
+};
 
 async function syncGroup(tabId, owners) {
   try {
@@ -725,11 +771,20 @@ async function syncGroup(tabId, owners) {
     const o = owners[0];
     const stored = ours.get(o.sid);
     if (tab.groupId !== -1) {
-      if (tab.groupId === stored) return;                         // 已经在对的组里
+      if (tab.groupId === stored) {
+        const g = await chrome.tabGroups.get(stored).catch(() => null);
+        if (g && groupTitleOk(g.title, o.sid)) {
+          const title = groupTitleFor(o);
+          if (g.title !== title || g.color !== o.group) {
+            await chrome.tabGroups.update(stored, { title, color: o.group });
+          }
+        }
+        return;
+      }
       if (![...ours.values()].includes(tab.groupId)) return;      // 用户的组，不碰
     }
-    // 旧组还在、还像我们的、且在同一个窗口 → 归队；否则新建。
-    // 跨窗口不归队：group({groupId}) 会把标签页搬进另一个窗口，比不显著更糟。
+    // 已登记的组仍存在、身份匹配且在同一个窗口就归队，否则新建。
+    // 跨窗口不归队：group({groupId}) 会把标签页搬进另一个窗口。
     let gid = null;
     if (stored !== undefined) {
       const g = await chrome.tabGroups.get(stored).catch(() => null);
@@ -737,9 +792,10 @@ async function syncGroup(tabId, owners) {
     }
     if (gid !== null) {
       await chrome.tabs.group({ tabIds: tabId, groupId: gid });
+      await chrome.tabGroups.update(gid, { title: groupTitleFor(o), color: o.group });
     } else {
       gid = await chrome.tabs.group({ tabIds: tabId });
-      await chrome.tabGroups.update(gid, { title: GROUP_TITLE, color: o.group });
+      await chrome.tabGroups.update(gid, { title: groupTitleFor(o), color: o.group });
       await chrome.storage.local.set({ [groupKey(o.sid)]: gid });
     }
   } catch { /* 标签页正被拖动/已关、API 不可用——都不是命令的错 */ }
@@ -789,6 +845,7 @@ function actText(cmd, p = {}) {
     case 'eval': return '执行脚本';
     case 'wait': return '等待';
     case 'ask': return '请用户搭把手';
+    case 'tabs': return p.action === 'new' ? '新建标签页' : (p.action === 'select' ? '切换标签页' : '管理标签页');
     // act 的每一步在批处理循环里单独同步过了（带「第 i/n 步」），
     // 批量结束后再记一条汇总只是时间线上的噪音
     case 'act': return '';
@@ -799,7 +856,7 @@ function actText(cmd, p = {}) {
 // content script 按需注入，注入前先探活，避免重复注入把 refMap 清空
 async function pingContent(tabId, frameId = 0) {
   try {
-    const r = await chrome.tabs.sendMessage(tabId, { __hc: 'ping' }, { frameId });
+    const r = await chrome.tabs.sendMessage(tabId, { __ab: 'ping' }, { frameId });
     return !!r?.pong;
   } catch {
     return false;
@@ -891,8 +948,8 @@ function routeOf(p) {
 // 后台标签页的对话框会被 Chrome 抑制（靶场里有一条测试守着），
 // 所以真撞上多半是用户正好切到了这一页，或者 beforeunload 拦下了导航。
 const contentBudget = (p) => {
-  if (p?.__hc === 'wait') return (Number(p.timeout) || 10000) + 5000;
-  if (p?.__hc === 'scroll') return Math.min(Number(p.times) || 1, 50) * (Number(p.wait) || 700) + 10000;
+  if (p?.__ab === 'wait') return (Number(p.timeout) || 10000) + 5000;
+  if (p?.__ab === 'scroll') return Math.min(Number(p.times) || 1, 50) * (Number(p.wait) || 700) + 10000;
   // ready 不单列：它自己的静默窗口只有 1.5 秒，外层 waitForReady 的 hardCap
   // 是 12 秒，都在默认预算以内——写一条算出来等于 15000 的规则纯属噪音。
   return 15000;
@@ -907,11 +964,15 @@ async function toContent(tabId, payload, frameId = 0) {
     r = await Promise.race([
       chrome.tabs.sendMessage(tabId, payload, { frameId }),
       new Promise((_, rej) => {
-        timer = setTimeout(() => rej(err('DIALOG_BLOCKING',
-          `页面脚本 ${Math.round(budget / 1000)} 秒没有响应。最常见的原因是这一页上弹了 `
-          + `alert / confirm / 「离开此页？」对话框——一弹出来页面的 JS 就全停了，扩展也够不着它。\n`
-          + `请让用户到浏览器里手动关掉那个框。别原样重试，wait 走的是同一条路，一样会挂住。\n`
-          + `（也可能是页面正在跑一段很重的脚本，那种情况稍后重试是有用的。）`)), budget);
+        timer = setTimeout(() => {
+          const diag = cdp.pendingDialog(tabId);
+          const diagNote = diag ? `（CDP 检测到处于打开状态的原生 ${diag.type} 弹窗："${diag.message}"）\n` : '';
+          rej(err('DIALOG_BLOCKING',
+            `页面脚本 ${Math.round(budget / 1000)} 秒没有响应。${diagNote}最常见的原因是这一页上弹了 `
+            + `alert / confirm / 「离开此页？」对话框——一弹出来页面的 JS 就全停了，扩展也够不着它。\n`
+            + `请让用户到浏览器里手动关掉那个框。别原样重试，wait 走的是同一条路，一样会挂住。\n`
+            + `（也可能是页面正在跑一段很重的脚本，那种情况稍后重试是有用的。）`));
+        }, budget);
       }),
     ]).finally(() => clearTimeout(timer));
   } catch (e) {
@@ -942,7 +1003,7 @@ function waitForLoad(tabId, timeout = 15000) {
 // about: 不在这张表里 —— about:blank 是可以注入的，而且新标签页在导航提交前
 // 恰恰长这样，误判成「注入不了」会让 tabs(new) 一次都不等。
 const UNINJECTABLE = /^(chrome|edge|devtools|view-source|chrome-extension|chrome-search|chrome-untrusted):/i;
-const isUninjectable = (url) => UNINJECTABLE.test(url || '') || /^https:\/\/chromewebstore\.google\.com/i.test(url || '');
+const isUninjectable = (url) => UNINJECTABLE.test(url || '') || /^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore)/i.test(url || '');
 
 // 等导航**提交**（新文档上位），不等它加载完。
 //
@@ -993,7 +1054,7 @@ async function waitForReady(tabId, { hardCap = 12000, quiet = 300, expectNav = f
   const deadline = Date.now() + hardCap;
   while (Date.now() < deadline) {
     try {
-      const r = await toContent(tabId, { __hc: 'ready', quiet, budget: deadline - Date.now() });
+      const r = await toContent(tabId, { __ab: 'ready', quiet, budget: deadline - Date.now() });
       if (r?.ready) return;
     } catch {
       // 正在跳转、或 content script 还没起来。下一轮再问。
@@ -1013,7 +1074,7 @@ async function waitForReady(tabId, { hardCap = 12000, quiet = 300, expectNav = f
 // 注入用 world:'MAIN' + 固定函数。CSP 挡的是「字符串变代码」，
 // 挡不住 executeScript 注入的编译好的函数——这也是 eval 挂掉而 query 没事的原因。
 
-const NET_SCRIPT_ID = 'hc-net-hook';
+const NET_SCRIPT_ID = 'ab-net-hook';
 
 // hook 必须赶在页面自己的 JS 之前，否则首屏那批请求全漏掉——而列表数据恰恰在首屏那批里。
 // 所以走 registerContentScripts + document_start，事后 executeScript 只能算补救。
@@ -1033,7 +1094,7 @@ async function ensureNetHook() {
 
 // 顶层框架的快照 + 各子框架的快照，拼成一份。子框架的 ref 打上 @fN。
 async function snapshotAll(tabId, p = {}) {
-  const top = await toContent(tabId, { __hc: 'snapshot', ...p });
+  const top = await toContent(tabId, { __ab: 'snapshot', ...p });
   const snaps = { 0: top.snapshotId };
 
   const frames = (await listFrames(tabId)).filter((f) => f.frameId !== 0);
@@ -1043,7 +1104,7 @@ async function snapshotAll(tabId, p = {}) {
   // Promise.all 保序，所以输出跟串行版一模一样。
   const subs = await Promise.all(
     frames.slice(0, 8)   // 广告位常有十几个 iframe，全抓会把快照撑爆
-      .map((f) => toContent(tabId, { __hc: 'snapshot' }, f.frameId)
+      .map((f) => toContent(tabId, { __ab: 'snapshot' }, f.frameId)
         .then((sub) => ({ f, sub }))
         .catch(() => ({ f, sub: null })))
   );
@@ -1076,7 +1137,7 @@ async function prepare(tabId, p) {
 // 带 ref 的命令统一从这里走。
 async function toFrame(tabId, cmd, p) {
   const { frameId, params } = await prepare(tabId, p);
-  const data = await toContent(tabId, { __hc: cmd, ...params }, frameId);
+  const data = await toContent(tabId, { __ab: cmd, ...params }, frameId);
   // 回执里把框架后缀补回去，否则 agent 传的是 e1@f602、收到的却是「已点击 [e1]」，
   // 看着像操作到了顶层框架的另一个元素上
   if (frameId !== 0 && data?.note) data.note = data.note.replace(/\[(e\d+)\]/g, `[$1@f${frameId}]`);
@@ -1184,9 +1245,9 @@ async function settle(id, frameId, params, baseline, beforeUrl) {
     // 跳转是最强的证据，而且此时旧 baseline 已经没有意义，立刻返回
     if (url !== beforeUrl) return { changed: true, navigated: true, parts: [`已跳转到 ${url}`] };
     try {
-      last = await toContent(id, { __hc: 'effect', baseline, ref: params.ref, selector: params.selector, find: params.find }, frameId);
+      last = await toContent(id, { __ab: 'effect', baseline, ref: params.ref, selector: params.selector, find: params.find }, frameId);
       if (expect) {
-        verdict = await toContent(id, { __hc: 'expect', expect, ref: params.ref, selector: params.selector, find: params.find }, frameId);
+        verdict = await toContent(id, { __ab: 'expect', expect, ref: params.ref, selector: params.selector, find: params.find }, frameId);
         if (verdict?.ok) return { ...last, changed: true, parts: [...(last.parts || []), `期望已满足：${verdict.text}`] };
         continue;   // 有期望就等期望，不按「证据稳定」早停
       }
@@ -1345,7 +1406,14 @@ function watchUntil(tabId, until, timeout) {
           });
           if (result) { stop(); return resolve({ outcome: 'completed' }); }
         }
-      } catch { /* 页面正在跳转 */ }
+      } catch (e) {
+        // 若目标标签页已被用户关闭，立即停止轮询，避免后台空转几分钟
+        if (/No tab with id|Tabs cannot be queried/i.test(String(e?.message || e))) {
+          stop();
+          return resolve({ outcome: 'cancelled', note: '目标标签页已关闭' });
+        }
+        /* 其余情况（如页面正在导航跳转）继续等下一轮 */
+      }
     }, 1000);
   });
   return { promise, stop };
@@ -1361,7 +1429,7 @@ async function evalCond(tabId, cond) {
     // 单元素判据 {ref|selector, checked|value|text}：走 content 的 expect，那边认得 refMap
     if ((cond.ref || cond.selector) && ('checked' in cond || 'value' in cond || 'text' in cond)) {
       const { ref, selector, not, ...expect } = cond;
-      const v = await toContent(tabId, { __hc: 'expect', expect, ref, selector }).catch(() => null);
+      const v = await toContent(tabId, { __ab: 'expect', expect, ref, selector }).catch(() => null);
       hit = !!v?.ok;
       return cond.not ? !hit : hit;
     }
@@ -1391,7 +1459,7 @@ function pollPanel(id, timeout) {
     while (Date.now() < deadline) {
       await sleep(400);
       try {
-        const r = await chrome.tabs.sendMessage(id, { __hcAsk: 'poll' });
+        const r = await chrome.tabs.sendMessage(id, { __abAsk: 'poll' });
         if (r && !r.pending) return r;
       } catch {
         // 页面正在跳转或刚从 bfcache 恢复，下一轮再问。
@@ -1425,7 +1493,7 @@ async function confirmPay(id, pay) {
   await chrome.tabs.update(id, { active: true });
   await chrome.scripting.executeScript({ target: { tabId: id }, files: ['mark.js'] });
 
-  chrome.notifications?.create(`hc-pay-${Date.now()}`, {
+  chrome.notifications?.create(`ab-pay-${Date.now()}`, {
     type: 'basic',
     iconUrl: 'icons/icon128.png',
     title: '确认这笔支付？',
@@ -1434,7 +1502,7 @@ async function confirmPay(id, pay) {
   }, () => void chrome.runtime.lastError);
 
   await chrome.tabs.sendMessage(id, {
-    __hcAsk: 'show',
+    __abAsk: 'show',
     danger: true,
     title: '要花钱了，确认一下',
     prompt: 'agent 请求点击这个按钮。确认之后才会真的点下去。',
@@ -1463,7 +1531,7 @@ async function performCore(id, cmd, p, { blockSensitive = false } = {}, ctx) {
   // 走真实事件，不做元素定位，效果证据只有全局那几样；支付闸门在这里管不着——
   // 坐标点不到「按钮文案」，这条路的安全边界是它本来就要求显式给坐标。
   if (cmd === 'click' && !hasTarget && Number.isFinite(params.x) && Number.isFinite(params.y)) {
-    const base = await toContent(id, { __hc: 'locate', baselineOnly: true }, frameId).catch(() => null);
+    const base = await toContent(id, { __ab: 'locate', baselineOnly: true }, frameId).catch(() => null);
     const x = Number(params.x), y = Number(params.y);
     let note;
     if (params.dragTo && Number.isFinite(params.dragTo.x) && Number.isFinite(params.dragTo.y)) {
@@ -1481,7 +1549,7 @@ async function performCore(id, cmd, p, { blockSensitive = false } = {}, ctx) {
     // fields 要带过去：fill 没有单一目标，它的效果证据靠逐个字段的状态，
     // 不然填表这条最高频的路上永远报「页面没有反应」。
     // forCmd 给虚拟光标定动画（点击是涟漪、输入是脉动），不参与定位本身
-    hasTarget ? { __hc: 'locate', forCmd: cmd, ...params } : { __hc: 'locate', baselineOnly: true, fields: params.fields },
+    hasTarget ? { __ab: 'locate', forCmd: cmd, ...params } : { __ab: 'locate', baselineOnly: true, fields: params.fields },
     frameId);
 
   // iframe 内元素的坐标是相对该框架视口的，而 CDP 打的是顶层视口坐标；
@@ -1513,7 +1581,7 @@ async function performCore(id, cmd, p, { blockSensitive = false } = {}, ctx) {
   let layer = (l2ok && (params.real || loc?.prefer === 'L2' || riskyOrigin)) ? 'L2' : 'L1';
 
   const runL1 = async () => {
-    const d = await toContent(id, { __hc: cmd, ...params }, frameId);
+    const d = await toContent(id, { __ab: cmd, ...params }, frameId);
     let n = d?.note || d?.text || '';
     if (frameId !== 0 && n) n = n.replace(/\[(e\d+)\]/g, `[$1@f${frameId}]`);
     return n;
@@ -1532,11 +1600,15 @@ async function performCore(id, cmd, p, { blockSensitive = false } = {}, ctx) {
   }
 
   let ev = await settle(id, frameId, params, loc?.baseline, before);
+  let child = await childOpenedSince(id, startedAt);
 
-  // 零证据 → 自动升级。敏感目标除外：L1 可能其实已经生效只是没留下痕迹，
-  // 对「提交/支付/删除」重试一次就是下第二笔单，这个闸门是确定性的，不问模型。
+  // 零证据 → 自动升级。
+  // 两个例外不升级：
+  // 1) 已经开出了新标签页（child 存在）——操作已经成功且开出了新页面，
+  //    此时重试必然会导致相同的链接被打开两次（开出多个相同标签页）；
+  // 2) 敏感目标（提交/支付/删除），重试可能造成重复下单/重复删除。
   let upgraded = false;
-  if (!ev.changed && !usedL2 && l2ok && !params.real) {
+  if (!ev.changed && !child && !usedL2 && l2ok && !params.real) {
     if (loc?.sensitive) {
       l2note = '（没有自动用真实事件重试：这是提交/支付/删除一类的动作，'
              + '重试可能造成重复执行。确认需要请显式传 real:true）';
@@ -1546,6 +1618,7 @@ async function performCore(id, cmd, p, { blockSensitive = false } = {}, ctx) {
         usedL2 = true;
         upgraded = true;
         ev = await settle(id, frameId, params, loc?.baseline, before);
+        child = await childOpenedSince(id, startedAt);
       } catch (e) {
         l2note = `（普通事件无效，真实事件也没能用上：${e.message}）`;
       }
@@ -1576,7 +1649,7 @@ async function performCore(id, cmd, p, { blockSensitive = false } = {}, ctx) {
   // 受控槽跟过去——不跟的话，agent 会一直对着一个「什么都没变」的原页面
   // 换着花样重试，而它要的东西就在隔壁。回执里把两个 id 都写清楚，
   // 想回原页面 tabs(action:"select") 一句话的事。
-  const child = await childOpenedSince(id, startedAt);
+  if (!child) child = await childOpenedSince(id, startedAt);
   if (child) {
     await waitForReady(child.id);
     await setActiveTabId(child.id);
@@ -1594,6 +1667,7 @@ function describeStep(st) {
   if (st.do === 'repeat') return `repeat ×≤${repeatMax(st)}${st.until ? ` until ${condText(st.until)}` : ''}（${(st.steps || []).length} 子步）`;
   if (st.do === 'if') return `if ${condText(st.cond)}`;
   if (st.do === 'assert') return `assert ${condText(st.cond)}`;
+  if (st.do === 'wait') return `wait ${st.for || ''}${st.value ? ` ${st.value}` : ''}`.trim();
   const t = st.find
     ? `${st.find.role ? st.find.role + ' ' : ''}「${st.find.name || st.find.selector || ''}」`
     : st.ref ? `[${st.ref}]`
@@ -1606,7 +1680,6 @@ function describeStep(st) {
     : st.check !== undefined ? (st.check ? ' 勾选' : ' 取消勾选')
     : st.key !== undefined ? ` ${[].concat(st.key).join('+')}`
     : st.url ? ` ${st.url}`
-    : st.value === undefined && st.for ? ` ${st.for} ${st.value || ''}`
     : '';
   return `${st.do || '?'} ${t}${extra}`.trim();
 }
@@ -1620,6 +1693,7 @@ function panelStep(st) {
   if (st.do === 'if') return '条件分支';
   if (st.do === 'assert') return '检查页面状态';
   if (st.do === 'read') return '读取页面';
+  if (st.do === 'wait') return `等待${st.for === 'idle' ? '网络空闲' : (st.for || '')}`;
   const t = st.find
     ? `「${st.find.name || st.find.selector || ''}」`
     : st.ref ? `[${st.ref}]`
@@ -1683,7 +1757,7 @@ const HANDLERS = {
     // 先等页面安静一小会儿再拍。以前直接拍，骨架屏/loading 态照拍不误，
     // agent 拿到一份「什么都还没有」的快照只能再拍一次当轮询用
     //（审计里同一 tab 连拍两次 588 回）。150ms 的静默窗口换掉那一整个回合。
-    await toContent(id, { __hc: 'ready', quiet: 150, budget: 800 }).catch(() => {});
+    await toContent(id, { __ab: 'ready', quiet: 150, budget: 800 }).catch(() => {});
     const snap = await guardCreds(id, await snapshotAll(id, p));
     return drift ? { ...snap, text: drift + '\n' + snap.text } : snap;
   },
@@ -1691,7 +1765,7 @@ const HANDLERS = {
   async navigate(p, tabId, ctx) {
     const id = await resolveTab(tabId);
     if (p.url) await chrome.tabs.update(id, { url: p.url });
-    else await toContent(id, { __hc: 'history', action: p.action || 'reload' });
+    else await toContent(id, { __ab: 'history', action: p.action || 'reload' });
     // 「DOM 可交互 + 安静下来」，比 load + sleep(300) 又快又准。
     // expectNav：上面那句 tabs.update / history 刚发出去，导航还没提交
     await waitForReady(id, { expectNav: true });
@@ -1751,7 +1825,7 @@ const HANDLERS = {
       }
       try {
         if (cmd === 'wait') {
-          const r = await toContent(id, { __hc: 'wait', ...rest });
+          const r = await toContent(id, { __ab: 'wait', ...rest });
           out.push(`✅ ${label}　${r?.text || ''}`);
           return;
         }
@@ -1762,14 +1836,14 @@ const HANDLERS = {
           return;
         }
         if (cmd === 'scroll') {
-          const r = await toContent(id, { __hc: 'scroll', ...rest });
+          const r = await toContent(id, { __ab: 'scroll', ...rest });
           out.push(`✅ ${label}　${(r?.text || '').split('\n')[0]}`);
           return;
         }
         // 观察步：批处理以前只能「做」不能「看」，中途想读一眼就得回模型一趟，
         // 而那正是 act 要省掉的东西。读到的内容原样进回执。
         if (cmd === 'read') {
-          const r = await toContent(id, { __hc: 'read', ...rest });
+          const r = await toContent(id, { __ab: 'read', ...rest });
           out.push(`📖 ${label}\n     ${String(r?.text || '').split('\n').join('\n     ')}`);
           return;
         }
@@ -1900,19 +1974,19 @@ const HANDLERS = {
   async read_text(p, tabId, ctx) {
     const id = await resolveTab(tabId);
     const drift = await driftNote(id, ctx?.sid);
-    const r = await guardCreds(id, await toContent(id, { __hc: 'read_text', ...p }));
+    const r = await guardCreds(id, await toContent(id, { __ab: 'read_text', ...p }));
     return drift ? { ...r, text: drift + '\n' + r.text } : r;
   },
 
   async wait(p, tabId) {
     const id = await resolveTab(tabId);
-    return toContent(id, { __hc: 'wait', ...p });
+    return toContent(id, { __ab: 'wait', ...p });
   },
 
   async query(p, tabId, ctx) {
     const id = await resolveTab(tabId);
     const drift = await driftNote(id, ctx?.sid);
-    const r = await guardCreds(id, await toContent(id, { __hc: 'query', ...p }));
+    const r = await guardCreds(id, await toContent(id, { __ab: 'query', ...p }));
     return drift ? { ...r, text: drift + '\n' + r.text } : r;
   },
 
@@ -1921,27 +1995,38 @@ const HANDLERS = {
   // 这条路由浏览器原生下载，不进内存、不进 context，还自带断点和大文件支持。
   // saveAs:false 是关键：不弹系统保存对话框（那是扩展够不着的东西）。
   async download(p) {
-    const filename = p.filename || `huashu-chrome/${Date.now()}-${(p.url.split('/').pop() || 'file').split('?')[0].slice(0, 60)}`;
+    const filename = p.filename || `chrome-agent-browser/${Date.now()}-${(p.url.split('/').pop() || 'file').split('?')[0].slice(0, 60)}`;
     const dlId = await chrome.downloads.download({ url: p.url, filename, conflictAction: 'uniquify', saveAs: false });
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         chrome.downloads.onChanged.removeListener(onChanged);
         reject(err('TIMEOUT', `下载超过 ${(p.timeout || 120000) / 1000}s 未完成`));
       }, p.timeout || 120000);
+      const finish = (item) => {
+        clearTimeout(timer);
+        chrome.downloads.onChanged.removeListener(onChanged);
+        resolve({ text: `已下载 ${Math.round((item?.fileSize || 0) / 1024)}KB → ${item?.filename}`, path: item?.filename, bytes: item?.fileSize });
+      };
+      const fail = (error) => {
+        clearTimeout(timer);
+        chrome.downloads.onChanged.removeListener(onChanged);
+        reject(err('INTERNAL', `下载中断：${error || '未知原因'}`));
+      };
       const onChanged = (d) => {
         if (d.id !== dlId) return;
         if (d.state?.current === 'complete') {
-          clearTimeout(timer);
-          chrome.downloads.onChanged.removeListener(onChanged);
-          chrome.downloads.search({ id: dlId }).then(([item]) =>
-            resolve({ text: `已下载 ${Math.round((item?.fileSize || 0) / 1024)}KB → ${item?.filename}`, path: item?.filename, bytes: item?.fileSize }));
+          chrome.downloads.search({ id: dlId }).then(([item]) => finish(item)).catch(fail);
         } else if (d.state?.current === 'interrupted') {
-          clearTimeout(timer);
-          chrome.downloads.onChanged.removeListener(onChanged);
-          reject(err('INTERNAL', `下载中断：${d.error?.current || '未知原因'}`));
+          fail(d.error?.current);
         }
       };
       chrome.downloads.onChanged.addListener(onChanged);
+      // 挂载后立即主动检查一次：极小文件可能在 await download 返回时已经进入 complete 状态，避免错过事件
+      chrome.downloads.search({ id: dlId }).then(([item]) => {
+        if (!item) return;
+        if (item.state === 'complete') finish(item);
+        else if (item.state === 'interrupted') fail(item.error);
+      }).catch(() => {});
     });
   },
 
@@ -1984,7 +2069,7 @@ const HANDLERS = {
   // 要重拍——省它一个回合
   async scroll(p, tabId) {
     const id = await resolveTab(tabId);
-    const r = await toContent(id, { __hc: 'scroll', ...p });
+    const r = await toContent(id, { __ab: 'scroll', ...p });
     const snap = await snapshotAll(id).catch(() => null);
     return snap ? { ...snap, text: `${r?.text || ''}\n\n${snap.text}` } : r;
   },
@@ -2010,7 +2095,7 @@ const HANDLERS = {
     try {
       const [probe] = await chrome.scripting.executeScript({
         target: { tabId: id }, world: 'MAIN',
-        func: () => (window.__hcNet || []).length,
+        func: () => (window.__abNet || []).length,
       });
       hasData = (probe?.result || 0) > 0;
     } catch { /* 注入不了就当没有 */ }
@@ -2025,7 +2110,7 @@ const HANDLERS = {
       target: { tabId: id },
       world: 'MAIN',
       func: (match, want, maxBody, index) => {
-        const all = window.__hcNet || [];
+        const all = window.__abNet || [];
         const hit = match ? all.filter((r) => (r.url || '').includes(match)) : all;
         if (want) {
           // 翻页时同一个接口会被调多次，URL 只差一个 cursor——光取最后一条会漏掉前面几批。
@@ -2120,16 +2205,11 @@ const HANDLERS = {
   async eval(p, tabId) {
     const id = await resolveTab(tabId);
 
-    // eval 不走 performCore，也就绕开了那里的支付闸门——实测一句
-    // `document.getElementById('pay').click()` 就能把确认整个跳过去。
-    // 所以求值期间在页面上架一道捕获阶段的拦截，只拦这一段时间。
-    // 注入失败（chrome:// 之类）不该拖垮 eval 本身：那些页面上也没有支付按钮。
-    let guarded = false;
-    try {
-      await ensureContent(id);
-      await toContent(id, { __hc: 'payGuard', on: true });
-      guarded = true;
-    } catch { /* 没有 content script 就没有这道防线，eval 照常跑 */ }
+    // eval 不走 performCore，因此执行前必须先安装支付点击闸门。
+    // 闸门不可用时拒绝执行，不能在安全控制缺失时继续。
+    await ensureContent(id);
+    await toContent(id, { __ab: 'payGuard', on: true });
+    const guarded = true;
 
     let result;
     try {
@@ -2138,8 +2218,18 @@ const HANDLERS = {
         world: 'MAIN',
         func: (src, max) => {
           try {
-            // eslint-disable-next-line no-eval
-            const v = (0, eval)(`"use strict"; (${src})`);
+            let v;
+            try {
+              // 优先作为单一表达式求值
+              // eslint-disable-next-line no-eval
+              v = (0, eval)(`"use strict"; (${src})`);
+            } catch (syntaxErr) {
+              if (syntaxErr instanceof SyntaxError) {
+                // 包含 let/const 声明或多语句时括号包裹会触发 SyntaxError，降级为普通语句块求值
+                // eslint-disable-next-line no-eval
+                v = (0, eval)(`"use strict"; ${src}`);
+              } else throw syntaxErr;
+            }
             let s;
             try { s = JSON.stringify(v, null, 2); } catch { s = String(v); }
             if (s === undefined) s = 'undefined';
@@ -2152,7 +2242,7 @@ const HANDLERS = {
       }));
     } finally {
       if (guarded) {
-        const r = await toContent(id, { __hc: 'payGuard', on: false }).catch(() => null);
+        const r = await toContent(id, { __ab: 'payGuard', on: false }).catch(() => null);
         const hit = r?.blocked;
         if (hit) {
           throw err('PAY_DECLINED',
@@ -2293,7 +2383,7 @@ const HANDLERS = {
       await setActiveTabId(id);
       await claimTab(sid, id, ctx);
       if (p.focus) await chrome.tabs.update(id, { active: true });
-      return { text: warn + `受控标签页切到 [${id}]${label ? `「${label}」` : ''}` };
+      return { text: warn + `受控标签页切到 [${id}]${label ? `「${label}」` : ''}`, tabId: id };
     }
     if (p.action === 'close') {
       const id = await resolveTab(p.tabId, sid, ctx);
@@ -2326,7 +2416,7 @@ const HANDLERS = {
     let selectors = [];
     if (Array.isArray(p.targets) && p.targets.length) {
       try {
-        ({ selectors } = await toContent(id, { __hc: 'markTargets', targets: p.targets }));
+        ({ selectors } = await toContent(id, { __ab: 'markTargets', targets: p.targets }));
       } catch { /* 高亮是锦上添花，失败不该拖垮整个请求 */ }
     }
 
@@ -2339,21 +2429,21 @@ const HANDLERS = {
     // ask 的浮条并进了 mark.js（统一呈现层），协议没变，只是换了宿主文件
     await chrome.scripting.executeScript({ target: { tabId: id }, files: ['mark.js'] });
     if (selectors.length) {
-      await chrome.tabs.sendMessage(id, { __hcAsk: 'flash', selectors }).catch(() => {});
+      await chrome.tabs.sendMessage(id, { __abAsk: 'flash', selectors }).catch(() => {});
     }
 
     // 用户很可能根本不在浏览器里——桌面通知是唯一能把他叫回来的东西
-    chrome.notifications?.create(`hc-ask-${Date.now()}`, {
+    chrome.notifications?.create(`ab-ask-${Date.now()}`, {
       type: 'basic',
       iconUrl: 'icons/icon128.png',
-      title: p.title || 'huashu-chrome 需要你搭把手',
+      title: p.title || 'chrome-agent-browser 需要你协助',
       message: String(p.prompt || '').slice(0, 180),
       priority: 2,
     }, () => void chrome.runtime.lastError);
 
     const started = Date.now();
     await chrome.tabs.sendMessage(id, {
-      __hcAsk: 'show', title: p.title, prompt: p.prompt, timeout, wantNote: p.wantNote !== false,
+      __abAsk: 'show', title: p.title, prompt: p.prompt, timeout, wantNote: p.wantNote !== false,
     });
     const panel = pollPanel(id, timeout);
 
@@ -2363,9 +2453,9 @@ const HANDLERS = {
     const res = await (auto ? Promise.race([panel, auto.promise]) : panel);
     auto?.stop();
     if (res.outcome === 'completed') {
-      await chrome.tabs.sendMessage(id, { __hcAsk: 'abort' }).catch(() => {});
+      await chrome.tabs.sendMessage(id, { __abAsk: 'abort' }).catch(() => {});
     }
-    await toContent(id, { __hc: 'unmarkTargets' }).catch(() => {});
+    await toContent(id, { __ab: 'unmarkTargets' }).catch(() => {});
 
     const waited = Math.round((Date.now() - started) / 1000);
     const snap = await snapshotAll(id).catch(() => ({ text: '' }));
@@ -2420,7 +2510,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 截图幕帘的开合。判据和 postMark 一样认回执——sendMessage 对没有监听者的
 // 页面 resolve(undefined) 而不是 reject，「没报错」不等于「藏好了」。
 const veilMarks = (tabId, on) =>
-  chrome.tabs.sendMessage(tabId, { __hcMark: 'stealth', on }).then((r) => !!r?.ok).catch(() => false);
+  chrome.tabs.sendMessage(tabId, { __abMark: 'stealth', on }).then((r) => !!r?.ok).catch(() => false);
 
 // ---------- 生命周期 ----------
 
@@ -2431,8 +2521,8 @@ const veilMarks = (tabId, on) =>
 // 清掉已注册的 alarm。以前那套靠 socket 常驻吊着 SW，看不出问题；socket 一搬走，
 // 「没 alarm + 没 socket」就等于扩展永久哑掉，而且一声不响。
 // create 同名 alarm 是幂等的（覆盖），重复调用没有代价。
-chrome.alarms.create('hc-keepalive', { periodInMinutes: 0.5 });
-chrome.runtime.onStartup.addListener(() => chrome.alarms.create('hc-keepalive', { periodInMinutes: 0.5 }));
+chrome.alarms.create('ab-keepalive', { periodInMinutes: 0.5 });
+chrome.runtime.onStartup.addListener(() => chrome.alarms.create('ab-keepalive', { periodInMinutes: 0.5 }));
 // SW 上一条命里挂着的调试会话，浏览器还替它留着——连同那条黄带子。
 // 每次启动扫一遍，否则用户会看到一条永远摘不掉的「已开始调试此浏览器」。
 cdp.reapOrphans();
@@ -2447,7 +2537,7 @@ chrome.alarms?.onAlarm.addListener(async () => {
   // 把前一个踢掉、被踢的立刻重连再踢回去，就是 8-29 抓到的每秒互相挤兑。
   // 但也只让它这一次：「文档建起来了却连不上」是踩过的死局，
   // 判据永远是连上了没有，不是文档在不在。
-  const kicked = await chrome.runtime.sendMessage({ __hcBridge: 'kick' }).catch(() => null);
+  const kicked = await chrome.runtime.sendMessage({ __abBridge: 'kick' }).catch(() => null);
   if (kicked?.connected) return setBadge(true);
   await directConnect();
   setBadge(await connected());
@@ -2466,7 +2556,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   if (Object.keys(shrunk).length) await chrome.storage.local.set(shrunk);
   const sess = await chrome.storage.session.get(null);
   const gone = Object.keys(sess).filter((k) =>
-    (k.startsWith('seen:') && k.endsWith(':' + tabId)) || k === frameSnapKey(tabId) || k === childKey(tabId));
+    (k.startsWith('seen:') && k.endsWith(':' + tabId)) || k === frameSnapKey(tabId));
   if (gone.length) await chrome.storage.session.remove(gone);
   await noteMarked(tabId, false);
   emit('tab_closed', { tabId });
@@ -2485,22 +2575,22 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
 chrome.runtime.onMessage.addListener((m, _s, sendResponse) => {
   // offscreen 递进来的：桥发来的命令/事件。这条消息同时把被回收的 SW 叫醒——
   // 这正是把 socket 搬出去之后，SW 仍然能及时干活的原因。
-  if (m?.__hcBridge === 'in') {
+  if (m?.__abBridge === 'in') {
     onMessage(m.msg);
     return false;
   }
   // offscreen 真的连上了，把 SW 自己那条兜底 socket 关掉——
   // 两条同时连着的话，桥「同时只认一个扩展」，会互相踢，命令随机丢
-  if (m?.__hcBridge === 'up') {
+  if (m?.__abBridge === 'up') {
     setBadge(true);
     noteBridgeVersion(m.bridge);
     if (directWs) { stopDirectPing(); try { directWs.close(); } catch { /* 已经废了 */ } directWs = null; }
     // 断线期间攒下的回执，连上就补发——桥那侧留着宽限等它们
-    void flushOutbox((msg) => chrome.runtime.sendMessage({ __hcBridge: 'out', msg }).catch(() => null));
+    void flushOutbox((msg) => chrome.runtime.sendMessage({ __abBridge: 'out', msg }).catch(() => null));
     return false;
   }
   // offscreen 拿不到 chrome.runtime.getManifest()，握手身份只能由这边供给
-  if (m?.__hcBridge === 'identity') {
+  if (m?.__abBridge === 'identity') {
     instanceId().then((iid) => sendResponse({
       extId: chrome.runtime.id,
       version: chrome.runtime.getManifest().version,
@@ -2510,19 +2600,19 @@ chrome.runtime.onMessage.addListener((m, _s, sendResponse) => {
     return true;   // 异步回答，通道要留着
   }
   // 同理，它也够不着 chrome.storage，连接状态托这边落盘
-  if (m?.__hcBridge === 'status') {
+  if (m?.__abBridge === 'status') {
     chrome.storage.session.set({ bridgeConnected: !!m.connected }).catch(() => {});
     setBadge(!!m.connected);
     return false;
   }
 
-  if (m.__hcPopup === 'status') {
+  if (m.__abPopup === 'status') {
     connState().then(sendResponse);
     return true;
   }
-  if (m.__hcPopup === 'connect') {
+  if (m.__abPopup === 'connect') {
     (async () => {
-      if (await ensureOffscreen()) await chrome.runtime.sendMessage({ __hcBridge: 'kick' }).catch(() => {});
+      if (await ensureOffscreen()) await chrome.runtime.sendMessage({ __abBridge: 'kick' }).catch(() => {});
       if (!(await connected())) await directConnect();
       const s = await connState();
       setBadge(s.connected);
@@ -2532,24 +2622,55 @@ chrome.runtime.onMessage.addListener((m, _s, sendResponse) => {
   }
   // 用户在 popup 里关掉高保真模式时，先把还挂着的调试会话断干净，
   // 否则权限撤销了，黄条却还留在标签页上，而且再也没人能去摘它
-  if (m.__hcPopup === 'detachAll') {
+  if (m.__abPopup === 'detachAll') {
     cdp.reapAll().finally(() => sendResponse({ ok: true }));
+    return true;
+  }
+  // popup 的近期审计轨迹：从各会话的执行日志中提取最近操作记录
+  if (m.__abPopup === 'audit') {
+    (async () => {
+      try {
+        const all = await chrome.storage.local.get(null);
+        const entries = [];
+        for (const [k, v] of Object.entries(all)) {
+          if (k.startsWith('actLog:') && Array.isArray(v)) {
+            const sid = k.slice('actLog:'.length);
+            const client = all[sidClientKey(sid)] || '';
+            const id = identityOf(sid, client);
+            for (const it of v) {
+              entries.push({
+                ...it,
+                sid,
+                who: id.label,
+                color: id.color,
+                shape: id.shape,
+                code: id.code,
+              });
+            }
+          }
+        }
+        entries.sort((a, b) => b.t - a.t);
+        sendResponse({ entries: entries.slice(0, 10) });
+      } catch {
+        sendResponse({ entries: [] });
+      }
+    })();
     return true;
   }
   // popup 的会话列表：谁、在控哪一页。数据全在扩展这一侧（槽 + live 名单），
   // popup 够不着桥，所以由这儿组装。
-  if (m.__hcPopup === 'sessions') {
+  if (m.__abPopup === 'sessions') {
     (async () => {
       try {
         const [all, lives] = await Promise.all([chrome.storage.local.get(null), liveList()]);
-        const clients = await chrome.storage.session.get(lives.map(sidClientKey));
+        const clients = await chrome.storage.local.get(lives.map(sidClientKey));
         const rows = [];
         for (const sid of lives) {
           const tabId = all[agentTabKey(sid)];
           let title = '';
           // 标题里的 emoji 前缀是我们自己加的，这一行左边已经有色点了，
           // 再带一次只是噪音
-          if (tabId) title = await chrome.tabs.get(tabId).then((t) => stripMarkPrefix(t.title) || t.url || '').catch(() => '');
+          if (tabId) title = await chrome.tabs.get(tabId).then((t) => t.title || t.url || '').catch(() => '');
           rows.push({ ...identityOf(sid, clients[sidClientKey(sid)]), tabId: title ? tabId : null, title });
         }
         sendResponse({ sessions: rows, enabled: await markEnabled() });
@@ -2561,13 +2682,13 @@ chrome.runtime.onMessage.addListener((m, _s, sendResponse) => {
   }
   // 开关拨过之后要立刻见效：关掉时把已经贴出去的标记全摘干净，
   // 否则用户会看到一个「已关闭」的开关配着满屏还在的标记。
-  if (m.__hcPopup === 'markSync') {
+  if (m.__abPopup === 'markSync') {
     (async () => {
       if (await markEnabled()) await resyncMarks();
       else {
         const { [MARKED_TABS]: list = [] } = await chrome.storage.session.get(MARKED_TABS);
         // 组和页内标记同开同关：开关拨到关，两种痕迹都得立刻消失
-        for (const tabId of list) { await postMark(tabId, { __hcMark: 'clear' }); await syncGroup(tabId, []); }
+        for (const tabId of list) { await postMark(tabId, { __abMark: 'clear' }); await syncGroup(tabId, []); }
         await chrome.storage.session.set({ [MARKED_TABS]: [] });
       }
       sendResponse({ ok: true });

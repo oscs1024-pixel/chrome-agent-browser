@@ -7,8 +7,7 @@
 // 安全边界就在 verifyClient：浏览器发起 WS 时强制带 Origin 且不可伪造，
 // 网页的 Origin 是自己的域名，扩展的是 chrome-extension://<id>。只放后者进来。
 import { WebSocketServer } from 'ws';
-import fs from 'node:fs';
-import { DEFAULT_PORT, writeBridgeInfo, newToken, tokenEquals, audit, ensureHome, ALLOWLIST_FILE } from './lib/paths.js';
+import { DEFAULT_PORT, writeBridgeInfo, newToken, tokenEquals, audit, ensureHome } from './lib/paths.js';
 import { VERSION } from './lib/version.js';
 // 纯字符串判定、不碰 chrome API，所以桥这边直接复用，不再抄一份
 import { scrubProse } from '../extension/redact.js';
@@ -65,7 +64,7 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
   // 话术和 doctor、mcp-server 的 hint 保持一致：首选动作是扩展弹窗里的「重连」，
   // 不是去 chrome://extensions——插件从来没消失过，去那儿只会把人引向「重装」。
   const NO_EXT_MSG = '扩展没连上桥。桥已经替你等过一轮'
-    + `（最多 ${WAIT_MAX / 1000}s），它还没回来。让用户点一下浏览器工具栏的 huashu-chrome 图标 → 「重连」`
+    + `（最多 ${WAIT_MAX / 1000}s），它还没回来。让用户点一下浏览器工具栏的 chrome-agent-browser 图标 → 「重连」`
     + '（插件没消失，只是这条连接断了）；Chrome 没开就先开；改过扩展代码才需要去 chrome://extensions 重载。';
 
   let lastActivity = Date.now();
@@ -103,8 +102,8 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
     verifyClient: (info, done) => {
       const origin = info.req.headers.origin;
       if (origin === undefined) return done(true);              // Node 侧，进握手后验 token
-      if (origin.startsWith('chrome-extension://')) return done(true);
-      audit({ ev: 'reject_origin', origin });                   // 网页想连桥——这就是攻击面，堵在这里
+      if (typeof origin === 'string' && origin.startsWith('chrome-extension://')) return done(true);
+      audit({ ev: 'reject_origin', origin });                   // 网页想连桥——堵在握手之前
       done(false, 403, 'forbidden origin');
     },
   });
@@ -189,16 +188,20 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
 
   function handleHello(ws, msg) {
     if (msg.type !== 'hello') return ws.close(4000, 'expected hello');
+    if (msg.v !== PROTOCOL) return ws.close(4010, 'protocol mismatch');
 
     if (msg.role === 'extension') {
       if (!ws.isExtension) return ws.close(4003, 'role/origin mismatch');
+      if (msg.version !== VERSION) {
+        log(`⚠️  版本不一致被拒：扩展 ${msg.version} vs 桥 ${VERSION} —— 去 chrome://extensions 重载扩展`);
+        return ws.close(4010, 'version mismatch');
+      }
+      if (typeof msg.instanceId !== 'string' || !msg.instanceId) return ws.close(4000, 'instanceId required');
       ws.helloed = true;
-      ws.extVersion = msg.version || '?';
+      ws.extVersion = msg.version;
       ws.chromeVersion = msg.chrome || '?';
       ws.headless = !!msg.headless;
-      // 老扩展不报 instanceId。退回按扩展 id 认——行为和单槽那版一样
-      // （同一份代码的两个实例仍会互相替换），但至少不会跟新扩展混着算。
-      ws.instanceId = msg.instanceId || `ext:${msg.extId || '?'}`;
+      ws.instanceId = msg.instanceId;
 
       // 同一个实例又连了一条：那是断线重连或重载扩展，旧的那条已经是死的，
       // 顶掉它。**只顶同实例的**——顶错了就退回单槽，每秒互踢的老毛病就回来了。
@@ -210,11 +213,6 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
       }
       extensions.add(ws);
 
-      // 改了扩展代码却忘记去 chrome://extensions 重载，是这类产品最高频的故障，
-      // 症状还都是些莫名其妙的行为。这里把它变成一句明确的话。
-      if (ws.extVersion !== VERSION) {
-        log(`⚠️  版本不一致：扩展 ${ws.extVersion} vs 桥 ${VERSION} —— 去 chrome://extensions 重载扩展`);
-      }
       log(`扩展已连接（${extLabel(ws)}）`);
       // 多实例不再是故障，但仍然值得说一声：命令只会去其中一个，
       // 而「为什么我的命令跑到另一个 Chrome 里去了」全靠这行日志才查得到。
@@ -235,15 +233,14 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
         audit({ ev: 'reject_token', client: msg.client });
         return ws.close(4001, 'bad token');
       }
+      if (typeof msg.sessionId !== 'string' || !msg.sessionId) return ws.close(4000, 'sessionId required');
       agents.add(ws);
       ws.helloed = true;
       ws.client = msg.client || 'unknown';
       // label 是宿主的显示名（「Codex CLI」），由 MCP server 从握手里认出来；
-      // client 仍是审计和 sid 用的 slug。老客户端不带 label，扩展侧退回美化 slug。
+      // client 仍是审计和 sid 用的 slug。
       ws.label = typeof msg.label === 'string' && msg.label ? msg.label.slice(0, 40) : undefined;
-      // 会话身份由 agent 自己带来，跨桥重启稳定。老客户端不带，退回连接序号——
-      // 行为和以前一样（桥一重启就丢槽），但至少不会串到别人的槽上。
-      ws.sid = msg.sessionId || `conn:${ws.connId}`;
+      ws.sid = msg.sessionId;
       log(`agent 已连接：${ws.label || ws.client}（${ws.client}，会话 ${ws.sid}）`);
       const ext = primary();
       send(ws, {
@@ -308,12 +305,6 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
 
   function dispatch(ws, msg, target = primary()) {
     if (!target) return enqueue(ws, msg);
-    const gate = checkSite(msg);
-    if (gate) {
-      audit({ ev: 'blocked', cmd: msg.cmd, client: ws.client, reason: gate.code });
-      return send(ws, { type: 'res', id: msg.id, ok: false, error: gate });
-    }
-
     // 下载、上传这类命令天然比一次点击慢得多，让调用方自己说要等多久
     const ms = Math.min(Math.max(Number(msg.timeout) || CMD_TIMEOUT, 1000), 600000);
     const key = `${ws.connId}:${msg.id}`;
@@ -347,13 +338,9 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
     // extension → agent
     if (msg.type === 'res') {
       if (!extensions.has(ws)) return;
-      let key = msg.__k;
-      let p = key ? pending.get(key) : null;
-      if (!p) {
-        // 老版本扩展不回传路由键——退回按 id 找，单会话下仍能工作
-        for (const [k, v] of pending) if (v.id === msg.id) { key = k; p = v; break; }
-      }
-      if (!p) return; // 已超时，丢弃
+      const key = msg.__k;
+      const p = typeof key === 'string' ? pending.get(key) : null;
+      if (!p) return; // 协议不完整或已超时，丢弃
       clearTimeout(p.timer);
       clearTimeout(p.orphanTimer);   // 断线宽限期里补发回来的，正是宽限的意义
       pending.delete(key);
@@ -367,28 +354,6 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
     }
 
     if (msg.type === 'event' && extensions.has(ws)) broadcast(msg);
-  }
-
-  // 站点白名单：默认拒绝。裁决在这里做，agent 够不着。
-  // allowlist.json 不存在 = 尚未配置 = 全放行（P0 开发期），P1 改为默认拒绝。
-  function checkSite(msg) {
-    const url = msg.params?.url;
-    if (!url) return null;
-    let list;
-    try {
-      list = JSON.parse(fs.readFileSync(ALLOWLIST_FILE, 'utf8'));
-    } catch {
-      return null;
-    }
-    if (list.mode !== 'allowlist') return null;
-    let host;
-    try {
-      host = new URL(url).hostname;
-    } catch {
-      return null;
-    }
-    const ok = (list.sites || []).some((s) => host === s || host.endsWith('.' + s));
-    return ok ? null : { code: 'SITE_NOT_ALLOWED', message: `${host} 不在授权站点列表里，请在扩展弹窗里授权` };
   }
 
   function send(ws, obj) {
@@ -496,7 +461,9 @@ function scrub(v, depth = 0) {
   if (typeof v !== 'object') return typeof v === 'string' ? scrubProse(v) : v;
   const out = {};
   for (const [k, val] of Object.entries(v)) {
-    if (typeof val === 'string' && SECRET_KEYS.has(k)) out[k] = `<${val.length}字>`;
+    if ((typeof val === 'string' || typeof val === 'number') && SECRET_KEYS.has(k)) {
+      out[k] = `<${String(val).length}字>`;
+    }
     // upload 的 base64 是整个文件，进日志等于把文件抄一遍
     else if (k === 'base64' && typeof val === 'string') out[k] = `<${Math.round(val.length * 0.75 / 1024)}KB>`;
     else if (k === 'expr' && typeof val === 'string' && val.length > 200) out[k] = val.slice(0, 200) + '…';

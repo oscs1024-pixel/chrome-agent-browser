@@ -59,7 +59,7 @@ export const isCredToken = (w) => {
 const PHONE = /(?<![0-9])(?:(?:00|\+)?86)?1[3-9]\d{9}(?![0-9])/g;
 
 export function scrubProse(s) {
-  if (typeof s !== 'string' || !/[\s　]/.test(s)) return s;   // 无空白 = 标识符，不动
+  if (typeof s !== 'string' || !/[\s　\u4e00-\u9fa5]/.test(s)) return s;   // 无空白且无中文 = 标识符，不动
   return s
     .replace(/[!-~]+/g, (w) => (isCredToken(w) ? `<凭据${w.length}字>` : w))
     .replace(PHONE, '<手机号>');

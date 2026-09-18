@@ -1,26 +1,31 @@
 {
-  "name": "huashu-chrome",
-  "version": "1.2.0",
-  "description": "让任何 AI agent 操控你自己的 Chrome——带着全部登录态。MCP + Chrome 扩展，Claude Code / Codex / Cursor / Gemini CLI 通用。",
+  "name": "chrome-agent-browser",
+  "version": "1.0.4",
+  "description": "Chrome Agent Browser 浏览器自动化工具包，通过 MCP 与 Pi 原生工具操控日常 Chrome。",
   "type": "module",
   "bin": {
-    "huashu-chrome": "src/cli.js"
+    "chrome-agent-browser": "src/cli.js",
+    "cab": "src/cli.js"
   },
   "files": [
     "src",
     "extension",
     "docs",
+    "media",
     "README.md"
   ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
+    "build": "node scripts/build.mjs",
+    "pack": "node scripts/build.mjs",
     "mcp": "node src/cli.js mcp",
-    "bridge": "node src/cli.js bridge --foreground",
+    "bridge": "node src/cli.js bridge",
     "doctor": "node src/cli.js doctor",
-    "test": "node --test test/protocol.test.js test/mcp.test.js test/fetch-pages.test.js test/liveness.test.js test/redact.test.js test/audit-redact.test.js test/learnings.test.js test/risk.test.js test/identity.test.js test/host.test.js test/presence.test.js test/act-script.test.js test/multi-instance.test.js",
-    "test:live": "node --test test/scenarios.test.js"
+    "test": "node --test test/protocol.test.js test/mcp.test.js test/fetch-pages.test.js test/liveness.test.js test/redact.test.js test/audit-redact.test.js test/learnings.test.js test/risk.test.js test/identity.test.js test/host.test.js test/presence.test.js test/read-text-visibility.test.js test/act-script.test.js test/multi-instance.test.js",
+    "test:live": "node --test test/scenarios.test.js",
+    "diagrams": "python3 scripts/render_diagrams.py"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.22.0",
@@ -36,9 +41,5 @@
     "ai-agent"
   ],
   "license": "MIT",
-  "author": "花叔 (alchaincyf)",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/alchaincyf/huashu-chrome.git"
-  }
+  "author": "Agent Browser"
 }

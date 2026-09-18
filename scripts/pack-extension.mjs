@@ -7,7 +7,7 @@
 // 商店会用自己的密钥签名；扩展 ID 由开发者账号下的首次上传决定）。
 // 其余文件原样。不改 extension/ 目录本身——那是 unpacked 加载和 doctor 指向的真源。
 //
-//   node scripts/pack-extension.mjs            → dist/huashu-chrome-<version>.zip
+//   node scripts/pack-extension.mjs            → dist/chrome-agent-browser-<version>.zip
 //
 // 剩下的是人做的：Chrome Web Store 开发者后台 → 新建项目 → 上传 zip → 填商店文案与
 // PRIVACY.md → 提交审核。debugger 权限会被单独问用途，README「点不动的时候」那一节就是答案。
@@ -20,15 +20,19 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = path.join(ROOT, 'extension');
 const manifest = JSON.parse(fs.readFileSync(path.join(SRC, 'manifest.json'), 'utf8'));
-const out = path.join(ROOT, 'dist', `huashu-chrome-${manifest.version}.zip`);
+const out = path.join(ROOT, 'dist', `chrome-agent-browser-${manifest.version}.zip`);
 
-const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-pack-'));
+const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-pack-'));
 fs.cpSync(SRC, stage, { recursive: true, filter: (p) => !/\.DS_Store$|\/content\/?$/.test(p) });
 const { key, ...clean } = manifest;
 fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify(clean, null, 2) + '\n');
 fs.mkdirSync(path.dirname(out), { recursive: true });
 try { fs.unlinkSync(out); } catch { /* 没有旧包 */ }
-execFileSync('zip', ['-qr', out, '.'], { cwd: stage });
+if (process.platform === 'win32') {
+  execFileSync('tar.exe', ['-a', '-cf', out, '*'], { cwd: stage });
+} else {
+  execFileSync('zip', ['-qr', out, '.'], { cwd: stage });
+}
 fs.rmSync(stage, { recursive: true, force: true });
 
 console.log(`${out}  (${Math.round(fs.statSync(out).size / 1024)}KB)`);

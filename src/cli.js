@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// huashu-chrome CLI
+// chrome-agent-browser CLI
 //   mcp      给 agent 用的 MCP server（stdio）。agent 配置里填的就是这条。
 //   bridge   桥 daemon。正常不用手动跑，mcp 会自己拉起。
 //   doctor   诊断：这类产品的头号支持成本就是「连不上」，把排查做成一条命令。
@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { readBridgeInfo, DEFAULT_PORT, HOME, AUDIT_FILE, LOG_FILE } from './lib/paths.js';
+import { readBridgeInfo, DEFAULT_PORT, HOME, AUDIT_FILE, LOG_FILE, moveFile } from './lib/paths.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -18,6 +18,16 @@ const flag = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? (argv[i + 1]
 const has = (k) => argv.includes(k);
 
 switch (cmd) {
+  case 'guide': {
+    const { writeGuide } = await import('./install.js');
+    const guidePath = writeGuide();
+    if (process.platform === 'darwin') spawn('open', [guidePath], { detached: true, stdio: 'ignore' }).unref();
+    else if (process.platform === 'win32') spawn('cmd', ['/c', 'start', '', guidePath], { detached: true, stdio: 'ignore' }).unref();
+    else spawn('xdg-open', [guidePath], { detached: true, stdio: 'ignore' }).unref();
+    console.log(`已在默认浏览器中打开引导说明书：\n  ${guidePath}`);
+    break;
+  }
+
   case 'mcp': {
     const { startMcpServer } = await import('./mcp-server.js');
     // stdio 是 MCP 的传输通道，任何 console.log 都会污染协议流。全部日志走 stderr。
@@ -27,13 +37,13 @@ switch (cmd) {
 
   case 'bridge': {
     const { startBridge } = await import('./bridge.js');
-    startBridge({ port: Number(flag('--port', DEFAULT_PORT)), foreground: has('--foreground') });
+    startBridge({ port: Number(flag('--port', DEFAULT_PORT)) });
     break;
   }
 
   // 手动发一条命令，开发和排错时不用绕道 agent
-  //   huashu-chrome call snapshot
-  //   huashu-chrome call tabs '{"action":"new","url":"https://example.com"}'
+  //   chrome-agent-browser call snapshot
+  //   chrome-agent-browser call tabs '{"action":"new","url":"https://example.com"}'
   case 'call': {
     // learnings 是纯本地读写，不需要桥和浏览器
     if (argv[1] === 'learnings') {
@@ -47,20 +57,35 @@ switch (cmd) {
     await c.connect();
     const params = argv[2] ? JSON.parse(argv[2]) : {};
     if (argv[1] === 'upload' && params.path) {
-      const buf = fs.readFileSync(params.path);
-      const ext = path.extname(params.path).toLowerCase();
-      params.type = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }[ext] || 'application/octet-stream';
-      params.name = path.basename(params.path);
-      params.base64 = buf.toString('base64');
-      delete params.path;
+      if (params.dropSelector) {
+        const buf = fs.readFileSync(params.path);
+        const ext = path.extname(params.path).toLowerCase();
+        params.type = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.pdf': 'application/pdf' }[ext] || 'application/octet-stream';
+        params.name = path.basename(params.path);
+        params.base64 = buf.toString('base64');
+      }
     }
+    const cmdName = argv[1];
+    let timeoutMs = 35000;
+    if (cmdName === 'download') timeoutMs = Math.max(Number(params.timeout) || 120000, 35000) + 30000;
+    else if (cmdName === 'ask') timeoutMs = Math.max(Number(params.timeout) || 300000, 5000) + 20000;
+    else if (cmdName === 'wait') timeoutMs = Math.max(Number(params.timeout) || 10000, 35000) + 15000;
+    else if (cmdName === 'act') timeoutMs = 120000;
     try {
-      const data = await c.call(argv[1], params, { tabId: params.tabId });
+      let data = await c.call(cmdName, params, { tabId: params.tabId, timeoutMs });
+      if (argv[1] === 'upload' && data?.needBytes && params.path) {
+        const buf = fs.readFileSync(params.path);
+        const ext = path.extname(params.path).toLowerCase();
+        params.type = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.pdf': 'application/pdf' }[ext] || 'application/octet-stream';
+        params.name = path.basename(params.path);
+        params.base64 = buf.toString('base64');
+        data = await c.call(cmdName, params, { tabId: params.tabId, timeoutMs });
+      }
       // download 走浏览器原生下载，文件先落在 Chrome 的下载目录，再挪到 savePath。
       // 不做这一步，CLI 路径的 savePath 会被静默忽略——工具报成功，文件却不在承诺的位置。
       if (data?.path && params.savePath) {
         fs.mkdirSync(path.dirname(params.savePath), { recursive: true });
-        fs.renameSync(data.path, params.savePath);
+        moveFile(data.path, params.savePath);
         console.log(`${Math.round((data.bytes || 0) / 1024)}KB → ${params.savePath}`);
         process.exit(0);
       }
@@ -74,6 +99,7 @@ switch (cmd) {
       // 截图不往终端里倒 base64——落盘并报路径
       if (data?.dataUrl) {
         const out = params.savePath || path.join(process.cwd(), `screenshot-${Date.now()}.png`);
+        fs.mkdirSync(path.dirname(out), { recursive: true });
         fs.writeFileSync(out, Buffer.from(data.dataUrl.split(',')[1], 'base64'));
         console.log(out);
         process.exit(0);
@@ -92,7 +118,7 @@ switch (cmd) {
 
   case 'install': {
     const { install } = await import('./install.js');
-    await install({ yes: !has('--dry-run'), only: flag('--only', null) });
+    await install({ yes: !has('--dry-run'), only: flag('--only', null), force: has('--force') });
     break;
   }
 
@@ -121,16 +147,17 @@ switch (cmd) {
   }
 
   default:
-    console.log(`huashu-chrome — 让任何 AI agent 操控你自己的 Chrome
+    console.log(`chrome-agent-browser — 本地 AI Agent 浏览器自动化工具包
 
-  huashu-chrome install        一键安装：自动配好所有 agent + 引导装扩展
-  huashu-chrome mcp            启动 MCP server（agent 配置里填这条，install 会自动写）
-  huashu-chrome doctor         诊断连接问题
-  huashu-chrome extension      打印扩展加载步骤
-  huashu-chrome audit [-n 30]  看最近的浏览器操作记录
-  huashu-chrome audit --stats [--days 7]   真实 agent 的用法统计：回合数、哪类调用最多、在哪儿浪费
-  huashu-chrome bridge --foreground   前台跑桥（调试用）
-  huashu-chrome install --dry-run     只看会改哪些配置，不写
+  chrome-agent-browser guide          在浏览器中打开可视化图解安装说明书
+  chrome-agent-browser install        一键安装：自动配好所有 agent + 引导装扩展（加 --force 可强制覆盖）
+  chrome-agent-browser mcp            启动 MCP server（agent 配置里填这条，install 会自动写）
+  chrome-agent-browser doctor         诊断连接问题
+  chrome-agent-browser extension      打印扩展加载步骤
+  chrome-agent-browser audit [-n 30]  看最近的浏览器操作记录
+  chrome-agent-browser audit --stats [--days 7]   真实 agent 的用法统计：回合数、哪类调用最多
+  chrome-agent-browser bridge                启动本地单例桥
+  chrome-agent-browser install --dry-run     只看会改哪些配置，不写
 
 配置目录 ${HOME}`);
 }
@@ -139,10 +166,10 @@ async function doctor() {
   const ok = (s) => console.log(`  ✅ ${s}`);
   const bad = (s, fix) => { console.log(`  ❌ ${s}`); if (fix) console.log(`     → ${fix}`); };
 
-  console.log('\nhuashu-chrome 体检\n');
+  console.log('\nchrome-agent-browser 体检\n');
 
   console.log('配置目录');
-  fs.existsSync(HOME) ? ok(HOME) : bad(`${HOME} 不存在`, '跑一次 `huashu-chrome mcp` 会自动创建');
+  fs.existsSync(HOME) ? ok(HOME) : bad(`${HOME} 不存在`, '跑一次 `chrome-agent-browser mcp` 会自动创建');
 
   console.log('\n桥');
   let info = readBridgeInfo();
@@ -187,7 +214,7 @@ async function doctor() {
         // 「去浏览器点开任意页面」对半开连接是错的——半开时 offscreen 自认为在线，
         // 不会因为你开了个页面就重连；「去 chrome://extensions」则把人引向重装。
         bad('Chrome 扩展这会儿没连着桥',
-          '点浏览器工具栏的 huashu-chrome 图标 → 「重连」，几秒后再跑一次 doctor（插件没消失，只是连接断了）。'
+          '点浏览器工具栏的 chrome-agent-browser 图标 → 「重连」，几秒后再跑一次 doctor（插件没消失，只是连接断了）。'
           + '图标都没有？Chrome 没开、扩展没装或被停用——按下面「扩展」一栏的目录去装。');
       }
     }
@@ -197,7 +224,7 @@ async function doctor() {
   const mf = path.join(ROOT, 'extension', 'manifest.json');
   fs.existsSync(mf)
     ? ok(`${path.join(ROOT, 'extension')}${alive ? '' : ''}（这只说明文件在；Chrome 是否从这里加载了，看上面「扩展在线」那行）`)
-    : bad('扩展目录缺失', '重装 huashu-chrome');
+    : bad('扩展目录缺失', '请确认 extension 目录完整');
 
   // bridge.log 里最近一次断连：用户体感的「插件消失」到底是什么时候、断了多久
   try {
@@ -210,7 +237,7 @@ async function doctor() {
     if (lastDown) console.log(`  ·  最近一次断开 ${lastDown}${lastUp ? `，最近一次连上 ${lastUp}` : '，之后没再连上'}（bridge.log，只有时分秒）`);
   } catch { /* 没日志就没日志 */ }
 
-  // 经验库里 agent 记下的「huashu-chrome 的 X 不生效」——产品 bug 住在经验库里，
+  // 经验库里 agent 记下的「chrome-agent-browser 的 X 不生效」——产品 bug 住在经验库里，
   // 没有这一栏就永远回不到开发者手上（screenshot 的 savePath 就是这么躺了一周的）
   try {
     const { LEARNINGS_DIR } = await import('./lib/learnings.js');
@@ -218,7 +245,7 @@ async function doctor() {
     for (const f of fs.readdirSync(LEARNINGS_DIR)) {
       if (!f.endsWith('.md')) continue;
       for (const line of fs.readFileSync(path.join(LEARNINGS_DIR, f), 'utf8').split('\n')) {
-        if (/huashu-chrome/.test(line) && /不生效|无效|没实现|不工作|静默|bug|坏了|绕过|绕法/i.test(line)) hits.push(`${f}: ${line.trim().slice(0, 110)}`);
+        if (/chrome-agent-browser/.test(line) && /不生效|无效|没实现|不工作|静默|bug|坏了|绕过|绕法/i.test(line)) hits.push(`${f}: ${line.trim().slice(0, 110)}`);
         if (hits.length >= 6) break;
       }
     }
@@ -230,7 +257,7 @@ async function doctor() {
 
   console.log('\n日志');
   console.log(`  桥日志   ${LOG_FILE}`);
-  console.log(`  操作审计 ${AUDIT_FILE}   （huashu-chrome audit 查看）`);
+  console.log(`  操作审计 ${AUDIT_FILE}   （chrome-agent-browser audit 查看）`);
   console.log('');
 }
 
@@ -313,7 +340,7 @@ function probe(info) {
     const ws = new WebSocket(`ws://127.0.0.1:${info.port}`);
     const t = setTimeout(() => { ws.close(); resolve({ ok: false, error: '超时' }); }, 3000);
     ws.onerror = () => { clearTimeout(t); resolve({ ok: false, error: '连接被拒' }); };
-    ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', role: 'agent', token: info.token, client: 'doctor', v: 1 }));
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', role: 'agent', token: info.token, client: 'doctor', sessionId: `doctor:p${process.pid}`, v: 1 }));
     ws.onmessage = (ev) => {
       clearTimeout(t);
       const m = JSON.parse(ev.data);
@@ -328,19 +355,17 @@ function probe(info) {
 function printExtension() {
   const dir = path.join(ROOT, 'extension');
   console.log(`
-装扩展有两条路：
+加载 chrome-agent-browser 扩展：
 
-  A. 商店一键装（推荐）：https://chromewebstore.google.com/detail/foiljmaplphdfimfcnfdpekhdnfbgfbf
+  1. 打开 Chrome 浏览器，访问 chrome://extensions
+  2. 开启右上角的「开发者模式」
+  3. 点击「加载已解压的扩展程序」，选择以下目录（或直接将该目录拖拽进页面）：
 
-  B. 手动加载（改过扩展代码、或商店打不开时）
-     1. Chrome 打开  chrome://extensions ，右上角打开「开发者模式」
-     2. 把这个文件夹拖到那一页上（或点「加载已解压的扩展程序」选中它）：
+     ${dir}
 
-        ${dir}
+     加 --reveal 参数可直接在访达 / 资源管理器里选中该目录。
 
-        加 --reveal 会直接在访达 / 资源管理器里选中它，拖过去就行。
-
-装好后扩展会自动连桥。跑 huashu-chrome doctor 应该看到「Chrome 扩展在线」
+装好后扩展会自动连桥。运行 chrome-agent-browser doctor 即可验证「Chrome 扩展在线」。
 `);
 }
 

@@ -78,7 +78,7 @@ function probe(port, hello) {
 // 握手要用的身份只有 SW 拿得到，问它要。要不到就不连——顶着一个假身份连上去，
 // 桥会记下一个错的扩展版本，而版本比对正是「改了代码忘记重载」的唯一探针。
 async function askIdentity() {
-  const r = await chrome.runtime.sendMessage({ __hcBridge: 'identity' }).catch(() => null);
+  const r = await chrome.runtime.sendMessage({ __abBridge: 'identity' }).catch(() => null);
   return r?.extId ? r : null;
 }
 
@@ -101,16 +101,20 @@ async function connect() {
       v: 1,
     };
 
-    let winner = null;
-    const races = PORTS.map((p) => probe(p, hello).then((r) => {
-      // 只留第一个握上手的，其余当场关掉——不关的话桥那边会看到
-      // 四条多余的扩展连接，而桥「同时只认一个扩展」，后来者会把前一个踢掉
-      if (winner) { try { r.sock.close(); } catch { /* 已经废了 */ } return null; }
-      winner = r;
-      return r;
-    }));
-    const results = await Promise.allSettled(races);
-    const hit = results.map((r) => r.value).find(Boolean);
+    let hit = null;
+    try {
+      hit = await probe(PORTS[0], hello);
+    } catch {
+      let winner = null;
+      const backup = PORTS.slice(1);
+      const races = backup.map((p) => probe(p, hello).then((r) => {
+        if (winner) { try { r.sock.close(); } catch { /* 已经废了 */ } return null; }
+        winner = r;
+        return r;
+      }));
+      const results = await Promise.allSettled(races);
+      hit = results.map((r) => r.value).find(Boolean);
+    }
     if (!hit) { setStatus(false); return scheduleReconnect(); }
     if (hit.sock.readyState !== 1) { setStatus(false); return scheduleReconnect(); }
 
@@ -124,14 +128,14 @@ async function connect() {
       if (msg.type === 'pong') return;              // 心跳回执，收到本身就是目的
       // 桥主动探活（静默 50 秒后它会先问一声再杀）——回一声就行，不必吵醒 SW
       if (msg.type === 'ping') { if (ws?.readyState === 1) ws.send(JSON.stringify({ type: 'pong' })); return; }
-      post({ __hcBridge: 'in', msg });              // 其余全部丢给 SW，它才认识命令
+      post({ __abBridge: 'in', msg });              // 其余全部丢给 SW，它才认识命令
     };
     ws.onmessage = (e) => { lastRx = Date.now(); deliver(e.data); };
     ws.onclose = () => { ws = null; stopPing(); setStatus(false); scheduleReconnect(); };
     ws.onerror = () => { /* onclose 会跟着来，在那儿统一处理 */ };
     startPing();
     setStatus(true);
-    post({ __hcBridge: 'up', bridge: hit.welcome.bridge });
+    post({ __abBridge: 'up', bridge: hit.welcome.bridge });
     for (const raw of hit.buffered) deliver(raw);   // 补上握手窗口里到达的那几条
   } finally {
     connecting = false;
@@ -187,10 +191,10 @@ function stopPing() {
 // SW 随时会被回收，所以连接状态不能只活在这个文件的内存里——它醒来
 // 第一件事就是问「现在连上了吗」，而那时它自己什么都不记得。
 // 但 chrome.storage 在 offscreen 里够不着，只能回报给 SW，由它去落盘。
-const setStatus = (connected) => post({ __hcBridge: 'status', connected });
+const setStatus = (connected) => post({ __abBridge: 'status', connected });
 
 chrome.runtime.onMessage.addListener((m, _s, sendResponse) => {
-  if (m?.__hcBridge === 'out') {                    // SW 要往桥上发一条（res / event）
+  if (m?.__abBridge === 'out') {                    // SW 要往桥上发一条（res / event）
     if (ws?.readyState === 1) ws.send(JSON.stringify(m.msg));
     sendResponse({ sent: ws?.readyState === 1 });
     return true;
@@ -201,11 +205,11 @@ chrome.runtime.onMessage.addListener((m, _s, sendResponse) => {
   // SW 的自愈 alarm 信了它就再也不走兜底——那是一条无限期的死路。
   const fresh = () => ws?.readyState === 1 && Date.now() - lastRx <= DEAD_MS;
   const state = () => ({ connected: fresh(), lastRx, bridge: bridgeVersion });
-  if (m?.__hcBridge === 'status') {
+  if (m?.__abBridge === 'status') {
     sendResponse(state());
     return true;
   }
-  if (m?.__hcBridge === 'kick') {                   // popup 点了「重连」，或 alarm 自愈
+  if (m?.__abBridge === 'kick') {                   // popup 点了「重连」，或 alarm 自愈
     connect().then(() => sendResponse(state()));
     return true;
   }

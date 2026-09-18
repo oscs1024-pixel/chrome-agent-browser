@@ -8,8 +8,8 @@
 // 点错的代价在真实登录态下可能是一笔真订单。
 
 (() => {
-  if (window.__huashuChrome) return;
-  window.__huashuChrome = true;
+  if (window.__agentBrowser) return;
+  window.__agentBrowser = true;
 
   let refMap = new Map();
   let snapshotSeq = 0;
@@ -44,8 +44,13 @@
   function isInteractive(el, s) {
     if (INTERACTIVE_TAGS.has(el.tagName)) {
       if (el.tagName === 'INPUT' && el.type === 'hidden') return false;
-      if (el.tagName === 'A' && !el.getAttribute('href')) return false;
-      return true;
+      if (el.tagName === 'A') {
+        if (el.getAttribute('href')) return true;
+        // 无 href 的 <a> 标签可能是 SPA 按钮（带 role="button"、onclick、tabindex 或 pointer 样式），
+        // 不在此处直接判死，允许继续向下检查属性与样式
+      } else {
+        return true;
+      }
     }
     const role = el.getAttribute('role');
     if (role && INTERACTIVE_ROLES.has(role)) return true;
@@ -234,7 +239,19 @@
   // 候选收集从 buildSnapshot 里抽出来，因为 find（语义定位）要用同一套判据。
   // 两边如果各写一份，「快照里看得到、find 却找不到」这类问题会层出不穷，
   // 而且极难排查——agent 明明照着快照写的名字。
-  function collectCandidates() {
+  // opts.anywhere：把视口窗口拆掉，整页都算候选。
+  //
+  // 快照不能这么干——它是给模型看的一份「眼前这一屏」的表示，几百屏的页面
+  // 全塞进去只会把 token 烧光。**但 find 必须这么干**：find 的全部价值就是
+  // 「页面重渲染后还能把那个按钮找回来」，而它按名字找东西时根本没有
+  // 「只在当前这一屏找」这个语义。只能找得到屏幕内的控件，等于在最需要它的
+  // 长表单 / 重渲染场景里刚好失效。
+  //
+  // 靶场里两个「删除」就撞在这上面：页面长到 3830px 后，y=2551 的按钮
+  // 刚好越过「视口 +3 屏」那个窗口，于是 find 说找不到——
+  // 而它就在那里，滚动一下就能点到。阈值式边界总会被下一个更长的页面突破。
+  function collectCandidates(opts = {}) {
+    const anywhere = !!opts.anywhere;
     // 一阶段：收候选。同时遍历 open shadow root —— 现在大量站点把控件塞在里面
     const cands = [];
     // 视口窗口之外还有多少可交互元素。以前一个字不提，agent 看着一份「完整」的
@@ -242,11 +259,13 @@
     let off = 0;
     const walk = (root) => {
       for (const el of root.querySelectorAll('*')) {
+        if (cands.length >= 400) { cands.truncated = true; return; }
         if (el.shadowRoot) walk(el.shadowRoot);
+        if (cands.length >= 400) { cands.truncated = true; return; }
         const s = getComputedStyle(el);
         if (!isInteractive(el, s)) continue;
-        if (!isVisible(el, s)) {
-          if (isVisible(el, s, true)) off += 1;
+        if (!isVisible(el, s, anywhere)) {
+          if (!anywhere && isVisible(el, s, true)) off += 1;
           continue;
         }
         const semantic = INTERACTIVE_TAGS.has(el.tagName)
@@ -504,13 +523,77 @@
 
   // ---------- 正文提取（渡口 grab 的思路：先找主容器，再剥噪声） ----------
 
+  // 噪声标签：整棵子树直接剥掉。form 不在其中——表单页的字段标签、校验文案、
+  // 说明文字全在里面，而表单向导正是最需要「读一眼再决定」的那类页面。
+  const NOISE_SEL = 'script, style, nav, header, footer, aside, noscript, svg, iframe, [aria-hidden="true"]';
+
+  // 这个元素对用户「看得见」吗——也就是它的文字会不会真的被渲染出来。
+  //
+  // 为什么不能省掉这一步：下面拿的是**脱离文档树**的副本（cloneNode），
+  // 而 innerText 需要布局信息；对未渲染节点，浏览器按规范退化成 textContent，
+  // 于是 display:none / visibility:hidden / opacity:0 里的文字会全部漏进来。
+  //
+  // 泄漏的代价不只是白付 token：模型会「看到」用户看不到的内容并据此判断，
+  // 而页面上任何一段隐藏文字都可以借此对模型下指令（提示注入）。
+  //
+  // 实测过的三类藏法：display:none、visibility:hidden、以及 opacity:0
+  // （DeepSeek 右侧那条问题导航轨就是 opacity:0 —— 视觉上只剩几道短横刻度，
+  //  文字本身被裁得看不见，但整句提问照样能被读出来）。
+  function isRendered(el) {
+    // checkVisibility 是这套判定唯一可信的来源：一次调用同时覆盖
+    // display:none、visibility:hidden|collapse、opacity:0、content-visibility:hidden。
+    if (typeof el.checkVisibility === 'function') {
+      try {
+        if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, contentVisibilityAuto: true })) return false;
+      } catch {
+        return false; // 参数被旧引擎拒绝时保守判不可见，宁可少读也不放隐藏内容进来
+      }
+    } else {
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') return false;
+      if (parseFloat(cs.opacity) === 0) return false;
+      if (cs.contentVisibility === 'hidden') return false;
+    }
+
+    // checkVisibility 不看尺寸，但「有文字却量不出高度或宽度」的叶子元素是
+    // 另一种藏法：`<div style="height:0;overflow:hidden">机密</div>`。
+    // 只对**叶子**下手——display:contents 这类容器天然是 0×0，但它的子节点
+    // 是可见的，一刀切会把正常正文一起切掉。
+    if (!el.children.length && (el.textContent || '').trim()) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return false;
+    }
+    return true;
+  }
+
+  // 造一份「剪掉不可见子树 + 剥掉噪声」的副本。
+  //
+  // 顺序很要紧：**先剪不可见，后删噪声**。
+  // 剪的那一步副本与活树完全同构，children 下标一一对应，不需要任何反查；
+  // 一旦先把噪声节点删掉，下标就错位了。
+  //
+  // 可见性只能在**活树**上判定（脱离文档的节点没有布局），而且全程只改副本、
+  // 不碰活树——用不着给用户的页面打标记再擦掉（那种做法一旦抛异常就会留痕）。
+  function prunedClone(cand) {
+    const clone = cand.cloneNode(true);
+    prune(clone, cand);
+    clone.querySelectorAll(NOISE_SEL).forEach((n) => n.remove());
+    return clone;
+  }
+
+  // 逆序删除：删元素时不影响还没处理的下标
+  function prune(c, live) {
+    for (let i = c.children.length - 1; i >= 0; i--) {
+      const cc = c.children[i];
+      const lc = live.children[i];
+      if (!lc || !isRendered(lc)) { cc.remove(); continue; }
+      prune(cc, lc);
+    }
+  }
+
   function mainText() {
     const cand = document.querySelector('article, main, [role="main"], #js_content, .article-content, .post-content') || document.body;
-    const clone = cand.cloneNode(true);
-    // form 不剥：以前剥了，于是表单页的字段标签、校验文案、说明文字全不在节选里，
-    // 而表单向导正是最需要「读一眼再决定」的那类页面。<select> 的选项文本会跟着
-    // 进来，是可接受的噪音。
-    clone.querySelectorAll('script, style, nav, header, footer, aside, noscript, svg, iframe, [aria-hidden="true"]').forEach((n) => n.remove());
+    const clone = prunedClone(cand);
     return (clone.innerText || '')
       .replace(/[\u200b-\u200f\u2060\ufeff\u00ad]/g, '')
       .replace(/[ \t]+\n/g, '\n')
@@ -520,8 +603,7 @@
 
   function toMarkdown() {
     const cand = document.querySelector('article, main, [role="main"], #js_content') || document.body;
-    const clone = cand.cloneNode(true);
-    clone.querySelectorAll('script, style, nav, header, footer, aside, noscript, svg, iframe, [aria-hidden="true"]').forEach((n) => n.remove());
+    const clone = prunedClone(cand);
     const out = [];
     const walk = (node) => {
       for (const c of node.children) {
@@ -564,10 +646,22 @@
   // 别的元素，要么根本不存在。所以批处理需要一种「页面重渲染后还能找回来」的定位方式。
   //
   // 用的是快照里已经给 agent 看过的那两样东西：role 和可访问名。
-  // 候选池来自 collectCandidates()，和快照完全同源——不能出现
-  // 「快照里明明有这个按钮，find 却说找不到」。
 
   const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+
+  // 候选池来自 collectCandidates()。
+  //
+  // 这里传 anywhere:true —— find 按名字/角色找东西，不该受当前滚动位置限制。
+  // 快照那边仍然是视口窗口（token 预算），所以快照看得到的 find 一定找得到；
+  // 反过来 find 比快照看得到更多，那正是它的用处。
+  //
+  // 候选项不会因此变得模棱两可：「先严后宽」的三级匹配不变，屏幕外的元素
+  // 只是终于进了候选名单。
+  function findPool(spec) {
+    return collectCandidates({ anywhere: true })
+      .map(({ el }) => el)
+      .filter((el) => !spec.role || roleOf(el) === spec.role);
+  }
 
   function findEl(spec) {
     if (spec.selector) {
@@ -576,9 +670,7 @@
       return el;
     }
 
-    const pool = collectCandidates()
-      .map(({ el }) => el)
-      .filter((el) => !spec.role || roleOf(el) === spec.role);
+    const pool = findPool(spec);
 
     const want = norm(spec.name);
     if (!want) {
@@ -894,7 +986,7 @@
     // **必须在下面的 elementFromPoint 之前调**——坐标落在驾驶舱底下时它要
     // 先让路（pointer-events:none 同步生效），否则遮挡检测会把我们自己的
     // 面板当成遮挡物，L2 的真实点击更会直接点进面板里。
-    window.__hcCursor?.(x, y, ({ click: 'click', type: 'type', select: 'type', key: 'key' })[p.forCmd] || 'aim');
+    window.__abCursor?.(x, y, ({ click: 'click', type: 'type', select: 'type', key: 'key' })[p.forCmd] || 'aim');
 
     // 遮挡检测和 doClick 保持同一套判断——L2 打的是坐标，遮挡时点中的是遮挡物，
     // 比 L1 更危险，更不能放过
@@ -1096,7 +1188,7 @@
     }
 
     // ①b 各字段的状态。fill 走这条：它没有单一目标，但填进去的每个值都是证据，
-    // 而且是强证据——value 从空变成「花叔」不可能是页面自己动出来的。
+    // 而且是强证据——value 从空变成「张三」不可能是页面自己动出来的。
     for (const bf of (base.fields || [])) {
       const rec = refMap.get(bf.ref);
       if (!rec) continue;
@@ -1302,7 +1394,7 @@
         // 填表是 locate 覆盖不到的多目标路径：光标逐个字段滑过去，
         // 用户看到的正是「它在一格一格填」
         const fr = el.getBoundingClientRect();
-        window.__hcCursor?.(fr.left + fr.width / 2, fr.top + fr.height / 2, 'type');
+        window.__abCursor?.(fr.left + fr.width / 2, fr.top + fr.height / 2, 'type');
 
         if (f.check !== undefined) {
           const want = !!f.check;
@@ -1379,7 +1471,12 @@
     const opt = [...el.options].find((o) => o.value === value || o.text.trim() === value);
     // 元素找得好好的，是这个**选项值**不存在——补救动作是从下面列出的可选项里
     // 换一个，不是重新 snapshot。所以不能用 REF_NOT_FOUND。
-    if (!opt) throw fail('NO_MATCH', `没有这个选项：${value}。可选：${[...el.options].map((o) => o.text).join(' | ')}`);
+    if (!opt) {
+      const list = [...el.options].map((o) => o.text.trim()).filter(Boolean);
+      const sample = list.slice(0, 30).join(' | ');
+      const more = list.length > 30 ? ` …（共 ${list.length} 个选项）` : '';
+      throw fail('NO_MATCH', `没有这个选项：${value}。可选：${sample}${more}`);
+    }
     el.value = opt.value;
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
@@ -1447,7 +1544,7 @@
 
     // 指名目标的 key 在 locate 那一步已经给过光标坐标了；无目标的（Esc、
     // 全局快捷键）光标原地按一下就行
-    if (!p.ref && !p.selector && !p.find) window.__hcCursor?.(null, null, 'key');
+    if (!p.ref && !p.selector && !p.find) window.__abCursor?.(null, null, 'key');
     const target0 = (p.ref || p.selector) ? resolve(p) : null;
     target0?.focus?.();
 
@@ -1552,7 +1649,7 @@
       return '删除了字符';
     }
 
-    if (editable && mods.includes('ctrl') && key.toLowerCase() === 'a') {
+    if (editable && (mods.includes('ctrl') || mods.includes('meta')) && key.toLowerCase() === 'a') {
       el.select?.();
       return '全选';
     }
@@ -1597,7 +1694,10 @@
   // 换成两段，各自对着一个真问题：先等 DOM 能用，再等它安静下来。
   async function doReady(p) {
     if (document.readyState === 'loading') {
-      await new Promise((r) => document.addEventListener('DOMContentLoaded', r, { once: true }));
+      await Promise.race([
+        new Promise((r) => document.addEventListener('DOMContentLoaded', r, { once: true })),
+        sleep(1000),
+      ]);
     }
     const quiet = Math.max(Number(p.quiet) || 300, 50);
     // 硬上限必须卡死：直播弹幕、行情页永远等不到「完全没有 DOM 变化」，
@@ -1664,7 +1764,7 @@
     `${e.tagName.toLowerCase()}${e.className ? '.' + String(e.className).trim().split(/\s+/)[0] : ''}(${e.scrollHeight})`;
 
   async function doScroll(p) {
-    window.__hcCursor?.(null, null, 'scroll');   // 光标原地顺势一沉，示意在滚
+    window.__abCursor?.(null, null, 'scroll');   // 光标原地顺势一沉，示意在滚
     const times = Math.min(p.times || 1, 50);
     if (p.ref) {
       resolve(p).scrollIntoView({ block: 'center' });
@@ -1755,9 +1855,9 @@
     const input = findFileInput(p);
     // 没有 input 的编辑器（X Article、Notion）只能拖放，而拖放需要文件字节 —— 让上游回落
     if (!input || input.tagName !== 'INPUT') return { data: { drop: true } };
-    const mark = 'hc' + Math.random().toString(36).slice(2, 10);
-    input.setAttribute('data-hc-fi', mark);
-    return { data: { selector: `input[data-hc-fi="${mark}"]`, accept: input.getAttribute('accept') || '' } };
+    const mark = 'ab' + Math.random().toString(36).slice(2, 10);
+    input.setAttribute('data-ab-fi', mark);
+    return { data: { selector: `input[data-ab-fi="${mark}"]`, accept: input.getAttribute('accept') || '' } };
   }
 
   function doUpload(p) {
@@ -1932,7 +2032,11 @@
     if (!el || !el.isConnected) throw fail('REF_NOT_FOUND', `找不到 ${p.ref || p.selector}`);
     const role = roleOf(el);
     const bits = [`${role} "${accessibleName(el)}"${stateOf(el, role)}${isVisible(el, undefined, true) ? '' : ' (不可见)'}`];
-    if (p.attr) bits.push(`${p.attr}: ${JSON.stringify(readAttr(el, p.attr))}`);
+    if (p.attr) {
+      let val = readAttr(el, p.attr);
+      if (p.attr === 'value' && isSecretField(el) && val) val = `<${String(val).length} 位>`;
+      bits.push(`${p.attr}: ${JSON.stringify(val)}`);
+    }
     const text = (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ? '' : el.innerText || '').replace(/\s+/g, ' ').trim();
     if (text) bits.push(`text: "${text.length > 400 ? text.slice(0, 400) + '…' : text}"`);
     return { data: { untrusted: true, text: bits.join('\n') } };
@@ -2023,10 +2127,10 @@
   // ---------- 消息入口 ----------
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (!msg || !msg.__hc) return;
+    if (!msg || !msg.__ab) return;
     (async () => {
       try {
-        switch (msg.__hc) {
+        switch (msg.__ab) {
           case 'ping': return sendResponse({ pong: true });
           case 'snapshot': return sendResponse({ data: buildSnapshot() });
           case 'locate': return sendResponse({ data: await doLocate(msg) });
@@ -2038,13 +2142,13 @@
               let el = null;
               try { el = refMap.get(t)?.el || document.querySelector(t); } catch { /* 不是合法 selector */ }
               if (!el) return;
-              el.setAttribute('data-hc-mark', String(i));
-              selectors.push(`[data-hc-mark="${i}"]`);
+              el.setAttribute('data-ab-mark', String(i));
+              selectors.push(`[data-ab-mark="${i}"]`);
             });
             return sendResponse({ data: { selectors } });
           }
           case 'unmarkTargets':
-            document.querySelectorAll('[data-hc-mark]').forEach((el) => el.removeAttribute('data-hc-mark'));
+            document.querySelectorAll('[data-ab-mark]').forEach((el) => el.removeAttribute('data-ab-mark'));
             return sendResponse({ data: { ok: true } });
           case 'payGuard':
             if (msg.on) { armPayGuard(); return sendResponse({ data: { armed: true } }); }
@@ -2077,7 +2181,7 @@
               },
             });
           default:
-            return sendResponse({ error: { code: 'INTERNAL', message: '未知指令 ' + msg.__hc } });
+            return sendResponse({ error: { code: 'INTERNAL', message: '未知指令 ' + msg.__ab } });
         }
       } catch (e) {
         sendResponse({ error: { code: e.code || 'INTERNAL', message: e.message } });

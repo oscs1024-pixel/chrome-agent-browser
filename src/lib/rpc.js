@@ -79,7 +79,7 @@ export class BridgeClient {
       if (!spawned) spawned = tryStartBridge();
       await sleep(250);
     }
-    throw new Error('连不上 huashu-chrome 桥。跑 `huashu-chrome doctor` 看看哪儿卡住了');
+    throw new Error('连不上 chrome-agent-browser 桥。跑 `chrome-agent-browser doctor` 看看哪儿卡住了');
   }
 
   #open(info) {
@@ -178,7 +178,13 @@ export function tryStartBridge() {
   try {
     fd = fs.openSync(LOCK_FILE, 'wx'); // O_EXCL：只有一个进程能建成功
   } catch {
-    const age = Date.now() - (fs.statSync(LOCK_FILE).mtimeMs || 0);
+    let age = 0;
+    try {
+      age = Date.now() - (fs.statSync(LOCK_FILE).mtimeMs || 0);
+    } catch {
+      // 锁文件恰好在 openSync 失败和 statSync 之间被抢锁者 unlink，直接返回等下一次轮询
+      return false;
+    }
     if (age > 30000) { try { fs.unlinkSync(LOCK_FILE); } catch {} } // 上次崩在这儿留下的死锁
     return false;
   }

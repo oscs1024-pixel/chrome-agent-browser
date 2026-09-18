@@ -1,49 +1,67 @@
-const dot = document.getElementById('dot');
+const conn = document.getElementById('conn');
 const state = document.getElementById('state');
 const btn = document.getElementById('btn');
 const conntip = document.getElementById('conntip');
+const tabstatus = document.getElementById('tabstatus');
+const tabstatusdot = document.getElementById('tabstatusdot');
+const tabstatustext = document.getElementById('tabstatustext');
+const copydoctor = document.getElementById('copydoctor');
+const copyaudit = document.getElementById('copyaudit');
 
-// 版本号：用户自查「扩展和 CLI 是不是同一版」的唯一入口。npx 会原地刷新扩展文件，
-// Chrome 跑的却还是旧的，这种错位只有版本号能看出来。
+// 版本号：用户自查「扩展和 CLI 是不是同一版」的唯一入口。
 document.getElementById('ver').textContent = 'v' + chrome.runtime.getManifest().version;
 
-// 「上次收到桥的消息是几秒前」「桥版本几」——用户以前只看得到一盏灯，
-// 分不清是扩展断了、桥没起、还是终端根本没在跑。
 function render(connected, r = {}) {
-  dot.classList.toggle('on', connected);
-  state.textContent = connected ? '已连接终端' : '未连接';
-  btn.disabled = connected;
-  btn.textContent = connected ? '一切正常' : '重连';
+  conn.dataset.connected = String(connected);
+  state.textContent = connected ? 'Chrome 已就绪' : '等待本地桥接';
+  btn.hidden = connected;
+  btn.disabled = false;
+  btn.textContent = '重新连接';
+
   const age = r.lastRx ? Math.round((Date.now() - r.lastRx) / 1000) : null;
   const bits = [];
-  if (r.bridge) bits.push(`桥 v${r.bridge}${r.bridge !== chrome.runtime.getManifest().version ? '（和扩展版本不一致，去 chrome://extensions 重载一次）' : ''}`);
-  if (age !== null) bits.push(`${age} 秒前收到心跳`);
-  if (!connected && r.offscreenError) bits.push(`后台文档建不起来：${r.offscreenError}`);
-  if (!connected && age === null) bits.push('从没连上过：终端那边跑过 agent 了吗？桥由 agent 第一次调用时拉起');
+  if (r.bridge) {
+    const mismatch = r.bridge !== chrome.runtime.getManifest().version;
+    bits.push(mismatch ? `桥 v${r.bridge} · 版本不一致，请重载扩展` : `本地桥 v${r.bridge}`);
+  }
+  if (age !== null) bits.push(`心跳 ${age} 秒前`);
+  if (!connected && r.offscreenError) bits.push(`后台连接失败：${r.offscreenError}`);
+  if (!connected && age === null) bits.push('首次使用时，由 Agent 调用自动启动本地桥');
   conntip.textContent = bits.join(' · ');
   conntip.hidden = !bits.length;
 }
 
-chrome.runtime.sendMessage({ __hcPopup: 'status' }, (r) => render(!!r?.connected, r || {}));
+chrome.runtime.sendMessage({ __abPopup: 'status' }, (r) => render(!!r?.connected, r || {}));
 
 btn.onclick = () => {
+  btn.hidden = false;
   btn.disabled = true;
   btn.textContent = '连接中…';
-  chrome.runtime.sendMessage({ __hcPopup: 'connect' }, (r) => render(!!r?.connected, r || {}));
+  chrome.runtime.sendMessage({ __abPopup: 'connect' }, (r) => render(!!r?.connected, r || {}));
 };
 
+// ---------- 当前激活标签页感知 ----------
+
+function updateActiveTabSense(rows = []) {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const cur = tabs && tabs[0];
+    if (!cur) return;
+    const hit = rows.find((r) => r.tabId === cur.id);
+    if (hit) {
+      tabstatus.dataset.controlled = 'true';
+      tabstatusdot.className = `status-badge-dot on ${hit.shape === 'square' ? 'square' : 'circle'}`;
+      tabstatusdot.style.background = hit.color || '#2563eb';
+      tabstatustext.textContent = `当前页正被 ${hit.label || 'Agent'} 操控 (${hit.code || ''})`;
+    } else {
+      tabstatus.dataset.controlled = 'false';
+      tabstatusdot.className = 'status-badge-dot safe';
+      tabstatusdot.style.background = '';
+      tabstatustext.textContent = '当前标签页未受控 · 处于安全浏览状态';
+    }
+  });
+}
+
 // ---------- 高保真模式 ----------
-//
-// 这是个**软开关**，不是权限开关。
-//
-// 原本的设计是让 debugger 走 optional_permissions，做成「默认安装轻量、用时再授权」。
-// Chrome 不允许：`debugger` 在不可选权限清单里，放进 optional_permissions 会被
-// 静默忽略，request() 直接回「Only permissions specified in the manifest may be
-// requested.」——用户点了只会看到一句莫名其妙的报错。
-//
-// 所以权限在 manifest 里、安装时就给了，这里只管「用不用」。默认开：
-// 权限既然已经拿到，再让用户多点一次没有安全收益，只是多一道摩擦。
-// 关掉之后 L2 全部走不通，写操作会退回普通合成事件。
 
 const l2dot = document.getElementById('l2dot');
 const l2state = document.getElementById('l2state');
@@ -51,67 +69,141 @@ const l2btn = document.getElementById('l2btn');
 
 function renderL2(on) {
   l2dot.classList.toggle('on', on);
-  l2state.textContent = on ? '高保真模式已开启' : '高保真模式（已关闭）';
-  l2btn.textContent = on ? '关闭' : '开启';
+  l2state.textContent = `原生事件通道 · ${on ? '已开启' : '已关闭'}`;
   l2btn.classList.toggle('on', on);
+  l2btn.setAttribute('aria-checked', String(on));
+  l2btn.setAttribute('aria-label', `${on ? '关闭' : '开启'}原生事件通道`);
+  l2btn.title = on ? '关闭原生事件通道' : '开启原生事件通道';
 }
 
 chrome.storage.local.get('l2Disabled', ({ l2Disabled }) => renderL2(!l2Disabled));
 
 // ---------- 控制标记 ----------
-//
-// 这是个安全信号，默认开：agent 在后台操控一个带着用户全部登录态的页面，
-// 而用户看不见——这件事本身就该有痕迹。给开关是因为有人会在录屏、演示，
-// 那时页面上多一圈彩色边框确实碍事。
 
 const markdot = document.getElementById('markdot');
 const markstate = document.getElementById('markstate');
 const markbtn = document.getElementById('markbtn');
 const sess = document.getElementById('sess');
+const sessioncount = document.getElementById('sessioncount');
 
 function renderMark(on) {
   markdot.classList.toggle('on', on);
-  markstate.textContent = on ? '控制标记已开启' : '控制标记（已关闭）';
-  markbtn.textContent = on ? '关闭' : '开启';
+  markstate.textContent = `页面状态标识 · ${on ? '已开启' : '已关闭'}`;
   markbtn.classList.toggle('on', on);
+  markbtn.setAttribute('aria-checked', String(on));
+  markbtn.setAttribute('aria-label', `${on ? '关闭' : '开启'}页面状态标识`);
+  markbtn.title = on ? '关闭页面状态标识' : '开启页面状态标识';
 }
 
-// 「现在有谁在控哪一页」。这一栏比开关本身有用：它是用户唯一能一眼看全
-// 所有会话的地方——页面上的标记只说得清用户正在看的那一页。
 function renderSessions(rows) {
   sess.textContent = '';
+  sessioncount.textContent = `${rows.length} 个`;
+  updateActiveTabSense(rows);
+
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = '暂无活动会话 · Agent 发起自动化时将自动接管';
+    sess.appendChild(empty);
+    return;
+  }
+
   for (const r of rows) {
     const line = document.createElement('div');
     line.className = 's';
+    line.title = r.title || '尚未认领页面';
+
     const sw = document.createElement('span');
-    sw.className = 'swatch';
-    sw.style.background = r.color;
+    sw.className = `swatch ${r.shape === 'square' ? 'square' : 'circle'}`;
+    sw.style.setProperty('--session', r.color);
+
     const who = document.createElement('span');
     who.className = 'who';
     who.textContent = r.label;
+
+    const code = document.createElement('span');
+    code.className = 'code';
+    code.textContent = r.code || '';
+
     const page = document.createElement('span');
     page.className = 'page';
-    // 全部 textContent：label 来自 agent 自己声明的 client 名，title 来自网页，
-    // 两个都是外部输入
-    page.textContent = r.title ? `· ${r.title}` : '· 还没认领标签页';
-    line.append(sw, who, page);
+    page.textContent = r.title || '尚未认领页面';
+
+    line.append(sw, who, code, page);
     sess.appendChild(line);
   }
 }
 
 function refreshMark() {
-  chrome.runtime.sendMessage({ __hcPopup: 'sessions' }, (r) => {
+  chrome.runtime.sendMessage({ __abPopup: 'sessions' }, (r) => {
     renderMark(r?.enabled !== false);
     renderSessions(r?.sessions || []);
   });
+  refreshAudit();
 }
 refreshMark();
+
+// ---------- 近期审计轨迹 ----------
+
+const auditlist = document.getElementById('auditlist');
+const auditcount = document.getElementById('auditcount');
+
+function relTime(t) {
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 5) return '刚刚';
+  if (s < 60) return `${s}秒前`;
+  if (s < 3600) return `${Math.floor(s / 60)}分前`;
+  return `${Math.floor(s / 3600)}时前`;
+}
+
+function renderAudit(entries = []) {
+  if (!auditlist) return;
+  auditlist.textContent = '';
+  if (auditcount) auditcount.textContent = entries.length ? `${entries.length} 条` : '暂无记录';
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = '暂无操作记录 · Agent 执行操作后将在此展示真实轨迹';
+    auditlist.appendChild(empty);
+    return;
+  }
+  for (const it of entries) {
+    const item = document.createElement('div');
+    item.className = 'audit-item';
+    item.title = `${it.who || 'Agent'} ${it.summary || it.text || ''}${typeof it.ms === 'number' ? ` (${it.ms}ms)` : ''}`;
+
+    const dot = document.createElement('span');
+    dot.className = `audit-dot ${it.shape === 'square' ? 'square' : 'circle'}${it.ok === false ? ' fail' : ''}`;
+    dot.style.setProperty('--session', it.color || '#2563eb');
+
+    const who = document.createElement('span');
+    who.className = 'audit-who';
+    who.textContent = it.who || 'Agent';
+
+    const sum = document.createElement('span');
+    sum.className = 'audit-summary';
+    sum.textContent = it.summary || it.text || '';
+
+    const time = document.createElement('span');
+    time.className = 'audit-time';
+    const dur = typeof it.ms === 'number' ? ` (${it.ms >= 1000 ? (it.ms / 1000).toFixed(1) + 's' : it.ms + 'ms'})` : '';
+    time.textContent = relTime(it.t) + dur;
+
+    item.append(dot, who, sum, time);
+    auditlist.appendChild(item);
+  }
+}
+
+function refreshAudit() {
+  chrome.runtime.sendMessage({ __abPopup: 'audit' }, (r) => {
+    renderAudit(r?.entries || []);
+  });
+}
 
 markbtn.onclick = () => {
   chrome.storage.local.get('markDisabled', ({ markDisabled }) => {
     chrome.storage.local.set({ markDisabled: !markDisabled }, () => {
-      // 先落盘再让 background 去贴/摘——它读的就是这个开关
-      chrome.runtime.sendMessage({ __hcPopup: 'markSync' }, () => refreshMark());
+      chrome.runtime.sendMessage({ __abPopup: 'markSync' }, () => refreshMark());
     });
   });
 };
@@ -120,9 +212,7 @@ l2btn.onclick = () => {
   chrome.storage.local.get('l2Disabled', ({ l2Disabled }) => {
     const turningOff = !l2Disabled;
     if (turningOff) {
-      // 关之前先把还挂着的调试会话断掉，否则开关关了、黄条还留在标签页上，
-      // 而且再也没人会去摘它
-      chrome.runtime.sendMessage({ __hcPopup: 'detachAll' }, () => {
+      chrome.runtime.sendMessage({ __abPopup: 'detachAll' }, () => {
         chrome.storage.local.set({ l2Disabled: true }, () => renderL2(false));
       });
     } else {
@@ -130,3 +220,27 @@ l2btn.onclick = () => {
     }
   });
 };
+
+// ---------- 底部快速操作闭环 ----------
+
+function wireCopyBtn(el, cmd, label) {
+  if (!el) return;
+  el.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      const span = el.querySelector('span') || el;
+      const prev = span.textContent;
+      span.textContent = '✓ 已复制!';
+      span.style.color = 'var(--green)';
+      setTimeout(() => {
+        span.textContent = prev;
+        span.style.color = '';
+      }, 1500);
+    } catch {
+      alert(`请手动运行命令：${cmd}`);
+    }
+  };
+}
+
+wireCopyBtn(copydoctor, 'chrome-agent-browser doctor', '复制体检命令');
+wireCopyBtn(copyaudit, 'chrome-agent-browser audit', '复制审计命令');

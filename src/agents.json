@@ -12,6 +12,7 @@
     "          （Windows→%APPDATA%，macOS→~/Library/Application Support，Linux→~/.config）"
   ],
   "agents": [
+    { "name": "Pi Agent", "client": "pi", "kind": "pi-extension", "paths": ["~/.pi/agent/extensions/chrome-agent-browser.ts", "~/.pi/agent/models.json", "~/.pi/agent/extensions"] },
     { "name": "Claude Code", "client": "claude-code", "kind": "json", "paths": ["~/.claude.json", "~/.claude/mcp.json"] },
     { "name": "Codex CLI", "client": "codex", "kind": "toml", "paths": ["~/.codex/config.toml"] },
     { "name": "Cursor", "client": "cursor", "kind": "json", "paths": ["~/.cursor/mcp.json"] },

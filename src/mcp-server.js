@@ -45,7 +45,7 @@ const EXPECT = {
     + '{checked, value, text: target contains, gone: target removed, appears: selector/text now on page}',
 };
 
-const TOOLS = [
+export const TOOLS = [
   {
     name: 'snapshot',
     description:
@@ -469,7 +469,7 @@ const TOOLS = [
   {
     name: 'reload',
     description:
-      'Reload the huashu-chrome extension (chrome.runtime.reload()) so an updated build takes effect — ' +
+      'Reload the chrome-agent-browser extension (chrome.runtime.reload()) so an updated build takes effect — ' +
       'no manual chrome://extensions visit needed. ~2s; bridge auto-reconnects, tabs keep state. ' +
       'DISRUPTIVE: the extension is shared by every tab and every other agent session on this machine — ' +
       'anything mid-flight elsewhere gets cut. Only call right after installing/updating, or when ' +
@@ -533,7 +533,7 @@ function wrapUntrusted(body, meta = '') {
 export async function startMcpServer({ client = 'unknown' } = {}) {
   const bridge = new BridgeClient({ client });
   const server = new Server(
-    { name: 'huashu-chrome', version: VERSION },
+    { name: 'chrome-agent-browser', version: VERSION },
     { capabilities: { tools: {} }, instructions: STRATEGY }
   );
 
@@ -547,7 +547,7 @@ export async function startMcpServer({ client = 'unknown' } = {}) {
     host = resolveHost({ clientInfo: server.getClientVersion(), flag: client });
     bridge.identify(host.client, host.label);
     audit({ ev: 'host', client: host.client, sid: bridge.sessionId, raw: host.raw, via: host.source });
-    console.error(`[huashu-chrome] 宿主：${host.label || host.client}（${host.source} = ${JSON.stringify(host.raw ?? client)}）`);
+    console.error(`[chrome-agent-browser] 宿主：${host.label || host.client}（${host.source} = ${JSON.stringify(host.raw ?? client)}）`);
     return host;
   };
 
@@ -628,13 +628,13 @@ export async function startMcpServer({ client = 'unknown' } = {}) {
         name,
         // 无人值守（cron、服务器）没有人可问。开关放在 MCP 这一侧读环境变量，
         // 扩展只管照做——扩展不该知道自己跑在什么场景里。
-        name === 'ask' ? { ...args, disabled: process.env.HUASHU_CHROME_ASK === 'off' } : args,
+        name === 'ask' ? { ...args, disabled: process.env.CHROME_AGENT_BROWSER_ASK === 'off' } : args,
         { tabId: args.tabId, timeoutMs: budgetOf(name, args, askMs) });
 
       // 浏览器只能下到 Downloads 里；下完再挪到 agent 要的位置，对它保持透明
       if (name === 'download' && args.savePath && data.path) {
         fs.mkdirSync(path.dirname(args.savePath), { recursive: true });
-        fs.renameSync(data.path, args.savePath);
+        moveFile(data.path, args.savePath);
         return { content: [{ type: 'text', text: `已下载 ${Math.round((data.bytes || 0) / 1024)}KB → ${args.savePath}` }] };
       }
 
@@ -698,7 +698,7 @@ export async function fetchPages(bridge, args) {
   const base = new URL(args.url);
   let n = Number(pg.from ?? (pg.param ? (base.searchParams.get(pg.param) ?? 1) : 0));
   const step = Number(pg.step) || 1;
-  let cursor = pg.cursorParam ? (base.searchParams.get(pg.cursorParam) || '') : null;
+  let cursor = pg.cursorParam ? (pg.from != null ? String(pg.from) : (base.searchParams.get(pg.cursorParam) || '')) : null;
   const pagesOut = [];
   let prev = null, stop = '';
 
@@ -706,7 +706,16 @@ export async function fetchPages(bridge, args) {
     const url = new URL(base);
     if (pg.param) url.searchParams.set(pg.param, String(n));
     if (pg.cursorParam && cursor) url.searchParams.set(pg.cursorParam, cursor);
-    const data = await bridge.call('fetch', { url: url.toString(), init: args.init, maxBody: args.maxBody || 2000000, via: args.via }, { tabId: args.tabId });
+    let data;
+    try {
+      data = await bridge.call('fetch', { url: url.toString(), init: args.init, maxBody: args.maxBody || 2000000, via: args.via }, { tabId: args.tabId });
+    } catch (e) {
+      if (pagesOut.length) {
+        stop = `第 ${i + 1} 页抓取失败（${e.message}），保留已获取的前 ${pagesOut.length} 页`;
+        break;
+      }
+      throw e;
+    }
     const m = /^(\d+)\n\n([\s\S]*)$/.exec(data?.text || '');
     const status = Number(m?.[1] || 0), body = m?.[2] ?? '';
     if (!(status >= 200 && status < 300)) { stop = `第 ${i + 1} 页返回 ${status}，停下`; break; }
@@ -752,7 +761,7 @@ function hint(e) {
     // 老话术让人去 chrome://extensions，而插件从来没消失过——那条路的终点是「重装」，
     // 重装恰好重启了扩展、连上了，于是反过来坐实了「插件消失了」这个误判（8-31 笔记）。
     NO_EXTENSION: '扩展没连上桥，桥已经替你等过一轮了。别再重试同一条命令——'
-      + '让用户点浏览器工具栏的 huashu-chrome 图标 → 「重连」（插件没消失，只是连接断了）；Chrome 没开就先开。',
+      + '让用户点浏览器工具栏的 chrome-agent-browser 图标 → 「重连」（插件没消失，只是连接断了）；Chrome 没开就先开。',
     STALE_SNAPSHOT: '页面已经变了，之前的 ref 全部作废。重新调用 snapshot，用新 ref 再点。',
     REF_NOT_FOUND: '这个 ref 在页面上找不到了。重新 snapshot。',
     NOT_INTERACTABLE: '元素当前不可点（被遮挡、隐藏或 disabled）。先 wait，或换一个目标。',
@@ -760,7 +769,7 @@ function hint(e) {
     DIALOG_BLOCKING: '页面上有 alert/confirm 弹窗挡着，所有浏览器命令都会卡住。让用户先手动关掉。',
     NO_TAB: '没有可用的标签页。先用 tabs(action:"new", url:…) 开一个。',
     TIMEOUT: '浏览器侧超时。页面可能还在加载——先 wait 再重试。',
-    NEEDS_L2: '这一步需要真实输入事件，但高保真模式被关了。让用户点开 huashu-chrome 扩展图标，'
+    NEEDS_L2: '这一步需要真实输入事件，但高保真模式被关了。让用户点开 chrome-agent-browser 扩展图标，'
       + '在「高保真模式」那一栏点「开启」——只需一次。',
     L2_BUSY: '真实输入事件用不了（多半是用户自己开着 DevTools，一个标签页只允许一个调试器）。'
       + '已经用普通事件完成了；如果结果不对，让用户关掉 DevTools 再试。',
