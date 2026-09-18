@@ -801,15 +801,25 @@ async function syncGroup(tabId, owners) {
     const tab = await chrome.tabs.get(tabId);
     if (!owners.length) {
       if (tab.groupId === -1) return;
-      const g = await chrome.tabGroups.get(tab.groupId).catch(() => null);
-      if (g && (g.title?.includes('·') || g.title?.startsWith('p'))) {
-        await chrome.tabs.ungroup(tabId);
+      const all = await chrome.storage.local.get(null);
+      const ours = new Map(Object.entries(all)
+        .filter(([k]) => k.startsWith('agentGroup:'))
+        .map(([k, v]) => [k.slice('agentGroup:'.length), v]));
+      for (const [sid, gid] of ours) {
+        if (gid !== tab.groupId) continue;
+        const g = await chrome.tabGroups.get(gid).catch(() => null);
+        if (g && groupTitleOk(g.title, sid)) await chrome.tabs.ungroup(tabId);
+        return;
       }
       return;
     }
     const o = owners[0];
     const key = groupKey(o.sid);
-    const { [key]: stored } = await chrome.storage.local.get(key);
+    const all = await chrome.storage.local.get(null);
+    const ours = new Map(Object.entries(all)
+      .filter(([k]) => k.startsWith('agentGroup:'))
+      .map(([k, v]) => [k.slice('agentGroup:'.length), v]));
+    const stored = ours.get(o.sid);
     if (tab.groupId !== -1) {
       if (tab.groupId === stored) {
         const g = await chrome.tabGroups.get(stored).catch(() => null);
@@ -821,6 +831,7 @@ async function syncGroup(tabId, owners) {
         }
         return;
       }
+      if (![...ours.values()].includes(tab.groupId)) return; // 用户的组，不碰
     }
     // 已登记的组仍存在、身份匹配且在同一个窗口就归队，否则新建。
     // 跨窗口不归队：group({groupId}) 会把标签页搬进另一个窗口。

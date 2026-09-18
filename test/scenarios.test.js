@@ -140,12 +140,12 @@ test('一次 fill 填完整张表，并如实回报每个字段', async () => {
   await c.call('fill', {
     snapshotId: snap.snapshotId,
     fields: [
-      { ref: ref('姓名'), text: '花叔' },
+      { ref: ref('姓名'), text: '测试员' },
       { ref: ref('邮箱'), text: 'a@b.com' },
       { ref: ref('我同意条款'), check: true },
     ],
   });
-  assert.equal(await val('document.getElementById("nat-name").value'), '"花叔"');
+  assert.equal(await val('document.getElementById("nat-name").value'), '"测试员"');
   assert.equal(await val('document.getElementById("nat-agree").checked'), 'true');
 });
 
@@ -228,11 +228,11 @@ test('没有 file input 时，靠拖放也能把文件送进去', async () => {
 
 test('query 的 @value 取的是当前值，不是 HTML 里写死的初始值', async () => {
   await go();
-  await c.call('type', { selector: '#nat-name', text: '花叔' });
+  await c.call('type', { selector: '#nat-name', text: '测试员' });
   // getAttribute('value') 会返回空 —— 而「空」看着像「这个字段没填」，
   // 抓一张已填好的表会静默全错
   const r = await c.call('query', { selector: '#nat-name', extract: { name: '.@value' } });
-  assert.match(r.text, /花叔/);
+  assert.match(r.text, /测试员/);
 });
 
 test('页面内容裹在 untrusted 边界里', async () => {
@@ -387,7 +387,7 @@ test('普通的「确认」不弹窗，照常点下去', async () => {
 test('删除这类敏感动作不弹支付确认', async () => {
   await go();
   await payFast();
-  // 花叔的口径：只有花钱的动作要二次弹窗，别的不限制。
+  // 设计口径：只有花钱的动作要二次弹窗，别的不限制。
   // 删除仍然受「不自动用真实事件重试」那道闸保护，但不该打断人。
   const r = await c.call('click', { selector: '#riskySim' });
   assert.ok(!r.isError, JSON.stringify(r));
@@ -611,11 +611,11 @@ test('不改变结构的连续动作可以全程用 ref', async () => {
     snapshotId: snap.snapshotId,
     steps: [
       { do: 'type', ref: refOf('手机号'), text: '13900139000' },
-      { do: 'type', ref: refOf('收件人'), text: '花叔' },
+      { do: 'type', ref: refOf('收件人'), text: '测试员' },
     ],
   });
   assert.match(r.text, /act 完成（顶层 2\/2/);
-  assert.equal(await val('document.getElementById("who").value'), '"花叔"');
+  assert.equal(await val('document.getElementById("who").value'), '"测试员"');
 });
 
 test('点击让隐藏区块显示出来，算「有效果」', async () => {
@@ -640,7 +640,7 @@ test('fill 的效果证据落在字段上，不再谎报「没有反应」', asy
   };
   const r = await c.call('fill', {
     snapshotId: snap.snapshotId,
-    fields: [{ ref: ref('姓名'), text: '花叔' }, { ref: ref('邮箱'), text: 'a@b.com' }],
+    fields: [{ ref: ref('姓名'), text: '测试员' }, { ref: ref('邮箱'), text: 'a@b.com' }],
   });
   // fill 没有单一目标，效果证据原先只剩全局指标，而填表根本不改变 DOM 结构——
   // 于是每次都报「没有可归因于这次操作的变化」，还把自己造成的焦点转移
@@ -649,7 +649,7 @@ test('fill 的效果证据落在字段上，不再谎报「没有反应」', asy
   const head = r.text.split('\n# ')[0];
   assert.doesNotMatch(head, /没有可归因于这次操作的变化/);
   assert.doesNotMatch(head, /完全没有反应/);
-  assert.match(head, /value 空 → 花叔/, `没报出字段的值变化：\n${head}`);
+  assert.match(head, /value 空 → 测试员/, `没报出字段的值变化：\n${head}`);
 });
 
 test('回执印出实际命中的元素，点错了下一轮就自曝', async () => {
@@ -901,7 +901,7 @@ test('漂移警告按会话记录：自己的导航不算漂移，别人的会�
 
 // ---------- v0.7：连接层与标签页跟随 ----------
 //
-// 这三条对应花叔 2026-08-26 晚上报的三个症状，而它们其实是同一个根因：
+  // 这三条对应 2026-08-26 晚上报的三个症状，而它们其实是同一个根因：
 // 会话身份以前用的是桥进程内的连接序号，桥一重启就从 1 重新数。
 // 实测那一晚桥重启了 38 次（版本换代、空闲自杀、手动重启），
 // 每一次都让所有会话的受控标签页同时失效、集体去继承同一个全局 tab。
