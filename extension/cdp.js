@@ -277,11 +277,26 @@ export async function setFileInput(tabId, selector, files) {
 // 默认 60% 缩放的 JPEG：视觉 token 按像素数算，缩到 0.6 就是省掉 64%，而
 // 「这一页大概长什么样、按钮在哪」这类问题 60% 足够看清。要读小字、量像素
 // 传 full:true 拿 1:1 PNG。缩放走 clip.scale——Chrome 在合成时缩，不是拍完再缩。
-export async function screenshot(tabId, { full = false } = {}) {
+export async function screenshot(tabId, { full = false, fullPage = false, maxHeight = 16384 } = {}) {
   return withL2(tabId, async (cmd) => {
+    if (fullPage) {
+      const m = await cmd('Page.getLayoutMetrics');
+      const content = m.cssContentSize || m.contentSize || {};
+      const width = Math.max(1, Math.round(content.width || 1280));
+      const height = Math.min(Math.max(1, Math.round(content.height || 800)), maxHeight);
+      const r = await cmd('Page.captureScreenshot', {
+        format: 'png',
+        captureBeyondViewport: true,
+        clip: { x: 0, y: 0, width, height, scale: 1 },
+      });
+      return { dataUrl: `data:image/png;base64,${r.data}`, scale: 1, width, height, fullPage: true };
+    }
     if (full) {
+      const m = await cmd('Page.getLayoutMetrics');
+      const v = m.cssVisualViewport || m.visualViewport || {};
+      const width = Math.max(1, Math.round(v.clientWidth || 1280)), height = Math.max(1, Math.round(v.clientHeight || 800));
       const r = await cmd('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
-      return { dataUrl: `data:image/png;base64,${r.data}`, scale: 1 };
+      return { dataUrl: `data:image/png;base64,${r.data}`, scale: 1, width, height, fullPage: false };
     }
     const scale = 0.6;
     const m = await cmd('Page.getLayoutMetrics');
@@ -291,7 +306,7 @@ export async function screenshot(tabId, { full = false } = {}) {
       format: 'jpeg', quality: 80, captureBeyondViewport: false,
       clip: { x: 0, y: 0, width, height, scale },
     });
-    return { dataUrl: `data:image/jpeg;base64,${r.data}`, scale };
+    return { dataUrl: `data:image/jpeg;base64,${r.data}`, scale, width: Math.round(width * scale), height: Math.round(height * scale), fullPage: false };
   });
 }
 

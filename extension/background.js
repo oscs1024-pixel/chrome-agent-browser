@@ -26,6 +26,8 @@ import { validateScript, condText, repeatMax, EXEC_BUDGET } from './script.js';
 // 桥那边永远显示「扩展没连上」。整个产品的连通性不能挂在一个单点上。
 
 let ensuring = null;
+const captureCache = new Map(); // captureId -> { captureId, tabId, scale, width, height, timestamp }
+
 let offscreenFailed = null;   // 记下原因，doctor 和 popup 要能说清为什么走了兜底
 
 // createDocument 在文档已存在时会抛错，并发调用也会互相撞上，所以认
@@ -1470,6 +1472,20 @@ function pollPanel(id, timeout) {
   })();
 }
 
+function pollBorrowPanel(id, timeout = 60000) {
+  return (async () => {
+    const deadline = Date.now() + timeout + 2000;
+    while (Date.now() < deadline) {
+      await sleep(400);
+      try {
+        const r = await chrome.tabs.sendMessage(id, { __abAsk: 'pollBorrow' });
+        if (r && !r.pending) return r;
+      } catch {}
+    }
+    return { outcome: 'timed_out' };
+  })();
+}
+
 // ---------- 支付确认 ----------
 //
 // 花钱的那一下要人点头。这是整个产品里唯一一处「明知会打扰也要打扰」的地方：
@@ -1526,6 +1542,12 @@ async function performCore(id, cmd, p, { blockSensitive = false } = {}, ctx) {
   // 顺带把效果基线采回来。没有 ref 的操作（fill、无 ref 的 key）只采基线。
   const hasTarget = !!(params.ref || params.selector || params.find);
 
+  if (cmd === 'click' && params.captureId && Number.isFinite(params.imageX) && Number.isFinite(params.imageY)) {
+    const cap = captureCache.get(params.captureId);
+    const scale = cap?.scale || 1;
+    params.x = Math.round(params.imageX / scale);
+    params.y = Math.round(params.imageY / scale);
+  }
   // 坐标点击 / 拖拽：canvas、地图、游戏这类站快照里什么都没有，agent 只能靠截图看，
   // 而看到了也没有任何一条路能点到那个位置（审计里 287 次截图集中在这类站）。
   // 走真实事件，不做元素定位，效果证据只有全局那几样；支付闸门在这里管不着——
@@ -1536,10 +1558,10 @@ async function performCore(id, cmd, p, { blockSensitive = false } = {}, ctx) {
     let note;
     if (params.dragTo && Number.isFinite(params.dragTo.x) && Number.isFinite(params.dragTo.y)) {
       await cdp.drag(id, x, y, Number(params.dragTo.x), Number(params.dragTo.y));
-      note = `已从 (${x}, ${y}) 拖到 (${params.dragTo.x}, ${params.dragTo.y})（真实事件）`;
+      note = `已从 (${x}, ${y}) 拖到 (${params.dragTo.x}, ${params.dragTo.y})（真实事件${params.captureId ? `，源自截图 ${params.captureId}` : ''}）`;
     } else {
       await cdp.click(id, x, y);
-      note = `已点击坐标 (${x}, ${y})（真实事件）`;
+      note = `已点击坐标 (${x}, ${y})（真实事件${params.captureId ? `，源自截图 ${params.captureId} 像素 [${params.imageX}, ${params.imageY}]` : ''}）`;
     }
     const ev = await settle(id, frameId, { ...params, ref: undefined }, base?.baseline, before);
     const after = (await chrome.tabs.get(id)).url;
@@ -2284,13 +2306,13 @@ const HANDLERS = {
   async screenshot(p, tabId) {
     const id = await resolveTab(tabId);
     // 幕帘：先把我们画的一切（光标、边框、驾驶舱、ask）藏起来再拍。
-    // 不藏的话 agent 会在自己的截图里看到一个页面上并不存在的发光箭头，
-    // 把它当页面元素去理解甚至去点。应答回来时样式已生效：两条截图路径
-    // 都在 ack 之后才合成新帧。页面里没有 mark.js 时 veil 返回 false——
-    // 幕帘失败绝不能弄失败截图本身。
     const veiled = await veilMarks(id, true);
+    let res;
+    if (p.fullPage && p.hideFixed !== false) {
+      await toContent(id, { __ab: 'toggleFixed', suppress: true }).catch(() => {});
+    }
     try {
-      return await cdp.screenshot(id, { full: !!p.full });
+      res = await cdp.screenshot(id, { full: !!p.full, fullPage: !!p.fullPage, maxHeight: p.maxHeight });
     } catch (e) {
       if (e.code !== 'NEEDS_L2' && e.code !== 'L2_BUSY') throw e;
       // 没有调试器权限时退回老路，前台保护一条不少
@@ -2305,8 +2327,6 @@ const HANDLERS = {
         await chrome.tabs.update(id, { active: true });
         await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
         await sleep(250);
-        // 切换可能没成功（窗口最小化、被别的窗口盖住）。不确认就截，
-        // 截到的还是用户那一页——这正是第二次事故的成因。
         const now = await chrome.tabs.get(id);
         if (!now.active) {
           throw err('NOT_INTERACTABLE',
@@ -2314,18 +2334,31 @@ const HANDLERS = {
             `拒绝截图——否则截到的是用户当前正在看的其它页面。`);
         }
       }
-      // 等一帧再抓：captureVisibleTab 拿的是合成器当前帧，幕帘的 visibility
-      // 刚设完可能还没画上去。60ms > 一个 60Hz 帧周期，页面进程的 rAF 这边够不着，
-      // 用固定等待兜住（tab 不在前台的分支上面已经 sleep(250)，这里覆盖的是
-      // 「本来就在前台」那条最短路径）。
       if (veiled) await sleep(60);
-      // 这条老路缩不了尺寸，至少换成 JPEG 省一截
-      return p.full
+      res = p.full || p.fullPage
         ? { dataUrl: await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' }), scale: 1 }
         : { dataUrl: await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 80 }), scale: 1 };
     } finally {
+      if (p.fullPage && p.hideFixed !== false) {
+        await toContent(id, { __ab: 'toggleFixed', suppress: false }).catch(() => {});
+      }
       if (veiled) void veilMarks(id, false);
     }
+    const captureId = 'cap_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+    captureCache.set(captureId, {
+      captureId,
+      tabId: id,
+      scale: res.scale || 1,
+      width: res.width,
+      height: res.height,
+      fullPage: !!p.fullPage,
+      timestamp: Date.now(),
+    });
+    const now = Date.now();
+    for (const [k, v] of captureCache) {
+      if (now - v.timestamp > 15 * 60 * 1000) captureCache.delete(k);
+    }
+    return { ...res, captureId };
   },
 
   async tabs(p, tabId, ctx) {
@@ -2391,7 +2424,50 @@ const HANDLERS = {
       await chrome.tabs.remove(id);
       return { text: warn + `已关闭标签页 ${id}` };
     }
-    throw err('INTERNAL', `未知 tabs 动作 ${p.action}`);
+    if (p.action === 'borrow') {
+      const id = await resolveTab(p.tabId, sid, ctx);
+      const tab = await chrome.tabs.get(id);
+      await chrome.scripting.executeScript({ target: { tabId: id }, files: ['mark.js'] }).catch(() => {});
+      const reason = p.reason || 'Agent 请求临时借用此标签页执行自动化任务';
+      chrome.notifications?.create(`ab-borrow-${Date.now()}`, {
+        type: 'basic',
+        iconUrl: 'icons/icon128.png',
+        title: 'AI Agent 申请借用标签页',
+        message: `${tab.title || ''}\n${reason}`.slice(0, 180),
+        priority: 2,
+      }, () => void chrome.runtime.lastError);
+      await chrome.tabs.sendMessage(id, { __abAsk: 'borrow', reason, title: tab.title }).catch(() => {});
+      const res = await pollBorrowPanel(id, 60000);
+      if (res.outcome !== 'borrowed') {
+        return {
+          outcome: res.outcome,
+          tabId: id,
+          text: `用户${res.outcome === 'denied' ? '拒绝了' : '未响应'}借用标签页 [${id}] 的请求。`,
+        };
+      }
+      await chrome.storage.local.set({
+        [`borrowed_${id}`]: { sid, windowId: tab.windowId, index: tab.index, time: Date.now() },
+      });
+      await setActiveTabId(id);
+      await claimTab(sid, id, ctx);
+      return {
+        outcome: 'borrowed',
+        tabId: id,
+        text: `已成功借用标签页 [${id}]「${tab.title || ''}」。该标签页已进入受控会话，操作完成后请务必调用 tabs(action:"return") 归还。`,
+      };
+    }
+    if (p.action === 'return') {
+      const id = await resolveTab(p.tabId, sid, ctx);
+      const borrowKey = `borrowed_${id}`;
+      const rec = (await chrome.storage.local.get(borrowKey))[borrowKey];
+      await chrome.storage.local.remove(borrowKey);
+      await chrome.tabs.sendMessage(id, { __abAsk: 'toast', message: '标签页已归还给用户' }).catch(() => {});
+      return {
+        outcome: 'returned',
+        tabId: id,
+        text: `已将标签页 [${id}] 归还给用户。` + (rec ? '（借用状态已解除）' : ''),
+      };
+    }
   },
 
   // 人工介入。产品里第一个「长阻塞 + 等用户动手」的命令。

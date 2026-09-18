@@ -18,8 +18,8 @@
   // 重新查找要跑一次全页面收集，而 effect 每 100ms 就被调一次。
   let lastTarget = null;
 
-  const INTERACTIVE_TAGS = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY']);
-  const INTERACTIVE_ROLES = new Set(['button', 'link', 'checkbox', 'radio', 'tab', 'menuitem', 'menuitemcheckbox', 'combobox', 'textbox', 'switch', 'option', 'searchbox']);
+  const INTERACTIVE_TAGS = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY', 'CANVAS']);
+  const INTERACTIVE_ROLES = new Set(['button', 'link', 'checkbox', 'radio', 'tab', 'menuitem', 'menuitemcheckbox', 'combobox', 'textbox', 'switch', 'option', 'searchbox', 'canvas']);
 
   // ---------- 可见性 ----------
 
@@ -143,6 +143,7 @@
       case 'BUTTON': case 'SUMMARY': return 'button';
       case 'SELECT': return 'combobox';
       case 'TEXTAREA': return 'textbox';
+      case 'CANVAS': return 'canvas';
       case 'INPUT': {
         const t = (el.type || 'text').toLowerCase();
         if (t === 'checkbox') return 'checkbox';
@@ -181,6 +182,18 @@
     const cls = String(el.className?.baseVal ?? el.className ?? '').trim().split(/\s+/)[0] || '';
     if (cls && cls.length <= 40) return `.${cls}`;
     return '';
+  }
+
+  function isHoverTrigger(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const hasPopup = el.getAttribute('aria-haspopup');
+    if (hasPopup && hasPopup !== 'false') return true;
+    const exp = el.getAttribute('aria-expanded');
+    if (exp !== null && exp !== 'true') return true;
+    const cls = String(el.className?.baseVal ?? el.className ?? '').toLowerCase();
+    if (/dropdown|menu-item|has-sub|nav-item|menu-trigger|has-popup/i.test(cls)) return true;
+    if (el.querySelector?.('ul, [role="menu"], [role="listbox"], .dropdown-menu, .sub-menu')) return true;
+    return false;
   }
 
   const isDisabled = (el) => !!(el.disabled || el.matches?.(':disabled') || el.getAttribute('aria-disabled') === 'true');
@@ -230,8 +243,9 @@
     }
     const sc = stateClass(el);
     if (sc) bits.push(`class: ${sc}`);
+    if (role === 'canvas') bits.push('visual:screenshot');
+    if (isHoverTrigger(el) && !el.getAttribute('aria-expanded')) bits.push('hover first');
     if (isDisabled(el)) bits.push('disabled');
-    return bits.length ? ` (${bits.join(', ')})` : '';
   }
 
   // ---------- 快照 ----------
@@ -309,7 +323,7 @@
     return keep;
   }
 
-  function buildSnapshot() {
+  function buildSnapshot(opts = {}) {
     // 编号跨快照保持不变 —— 老元素拿回它上一轮的号。
     //
     // 原先每次都从 e1 重新数。后果是 agent 上一轮建立的全部认知
@@ -359,6 +373,26 @@
       do { next += 1; } while (taken.has('e' + next));
       row.ref = 'e' + next;
       taken.add(row.ref);
+    }
+
+    if (opts && opts.probeHover) {
+      const candidates = rows.filter((r) => isHoverTrigger(r.el)).slice(0, 6);
+      for (const hc of candidates) {
+        try {
+          hc.el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true }));
+          hc.el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }));
+          const subItems = Array.from(hc.el.querySelectorAll('a, button, [role="menuitem"], li'))
+            .filter((e) => e.offsetParent !== null && (e.innerText || e.textContent).trim())
+            .map((e) => (e.innerText || e.textContent).trim().replace(/\s+/g, ' '))
+            .filter((t) => t.length > 0 && t.length < 30);
+          if (subItems.length) {
+            const preview = subItems.slice(0, 4).join(' | ') + (subItems.length > 4 ? ' …' : '');
+            hc.hint = (hc.hint ? hc.hint + ', ' : '') + `hover first: ${preview}`;
+          }
+          hc.el.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true, cancelable: true }));
+          hc.el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, cancelable: true }));
+        } catch {}
+      }
     }
 
     const lines = [];
@@ -2126,13 +2160,39 @@
 
   // ---------- 消息入口 ----------
 
+  let suppressedFixed = [];
+  function toggleFixedElements(suppress) {
+    if (suppress) {
+      suppressedFixed = [];
+      for (const el of document.querySelectorAll('*')) {
+        if (el.nodeType !== 1) continue;
+        try {
+          const pos = window.getComputedStyle(el).position;
+          if (pos === 'fixed' || pos === 'sticky') {
+            suppressedFixed.push({ el, orig: el.style.visibility });
+            el.style.visibility = 'hidden';
+          }
+        } catch {}
+      }
+    } else {
+      for (const { el, orig } of suppressedFixed) {
+        try { el.style.visibility = orig; } catch {}
+      }
+      suppressedFixed = [];
+    }
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || !msg.__ab) return;
     (async () => {
       try {
         switch (msg.__ab) {
           case 'ping': return sendResponse({ pong: true });
-          case 'snapshot': return sendResponse({ data: buildSnapshot() });
+          case 'snapshot': return sendResponse({ data: buildSnapshot(msg) });
+          case 'toggleFixed': {
+            toggleFixedElements(!!msg.suppress);
+            return sendResponse({ data: { ok: true } });
+          }
           case 'locate': return sendResponse({ data: await doLocate(msg) });
           // ask 要高亮的目标可能是 ref（只有这里的 refMap 认得），而高亮画在
           // ask-overlay 那一侧。打个临时属性当交接凭证，用完就摘。

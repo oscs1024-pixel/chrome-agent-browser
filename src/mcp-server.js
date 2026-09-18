@@ -50,10 +50,19 @@ export const TOOLS = [
     name: 'snapshot',
     description:
       'Capture the current page as a compact list of interactive elements with refs and state ' +
-      '(value/checked/selected/expanded/disabled), plus dialogs, alerts and a text excerpt. ' +
-      'Call this before any click/type. Cheap — prefer it over screenshots or eval. Refs ending in @fN live in ' +
-      'an iframe: pass them through unchanged, they route themselves.',
-    inputSchema: { type: 'object', properties: { tabId: TAB } },
+      '(value/checked/selected/expanded/disabled), plus dialogs, alerts, hover triggers, and canvas indicators. ' +
+      'Call this before any click/type. Cheap — prefer it over screenshots. Submenus marked with [hover first: ...] ' +
+      'can be revealed by hovering the trigger. Pass probeHover:true to actively discover hidden dropdown menus.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: TAB,
+        probeHover: {
+          type: 'boolean',
+          description: 'Actively probe dropdowns and menu triggers to reveal hidden submenu items with [hover first: ...].',
+        },
+      },
+    },
   },
   {
     name: 'navigate',
@@ -71,7 +80,7 @@ export const TOOLS = [
   {
     name: 'click',
     description: 'Click ONE element by ref. Know your next step already? Use `act` instead — each extra call costs a full model turn. '
-      + 'Canvas / map / game with nothing in the snapshot? Pass x,y (CSS px from a screenshot) for a real click there; add dragTo for a drag.',
+      + 'Canvas / map / game with nothing in the snapshot? Pass captureId + imageX, imageY (measured from a screenshot) for exact coordinate clicking, or pass x,y directly; add dragTo for a drag.',
     inputSchema: {
       type: 'object',
       // 没有 button 参数：右键弹出的是浏览器原生菜单，扩展够不着，
@@ -79,6 +88,9 @@ export const TOOLS = [
       properties: {
         ref: REF, find: FIND, snapshotId: SNAP, selector: SEL, tabId: TAB, real: REAL, expect: EXPECT,
         x: { type: 'number' }, y: { type: 'number' },
+        captureId: { type: 'string', description: 'captureId returned by screenshot. Used to resolve imageX/imageY relative to captured image bounds.' },
+        imageX: { type: 'number', description: 'X pixel coordinate on the image with captureId.' },
+        imageY: { type: 'number', description: 'Y pixel coordinate on the image with captureId.' },
         dragTo: { type: 'object', description: '{x, y}: press at x,y, move here, release.' },
       },
       required: [],
@@ -174,7 +186,8 @@ export const TOOLS = [
     name: 'screenshot',
     description:
       'Screenshot the controlled tab, background tabs included. Prefer snapshot / read_text — ' +
-      'they cost far less. Returned at 60% scale as JPEG by default; full:true for 1:1 PNG (e.g. to read small text or measure pixels).',
+      'they cost far less. Returns captureId alongside image for subsequent pixel-accurate clicking. ' +
+      'Set fullPage:true for streaming full document height capture with fixed header/footer deduplication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -182,25 +195,26 @@ export const TOOLS = [
         focus: { type: 'boolean', description: 'Bring the tab forward first. Interrupts the user — ask before using.' },
         savePath: { type: 'string', description: 'Absolute path to write the image instead of returning it inline.' },
         full: { type: 'boolean', description: 'Full-resolution PNG instead of the scaled JPEG.' },
+        fullPage: { type: 'boolean', description: 'Capture the full scrollable page height instead of just visible viewport.' },
+        maxHeight: { type: 'number', description: 'Max page height in pixels for fullPage capture (default 16384). Prevents OOM on infinite scroll.' },
+        hideFixed: { type: 'boolean', description: 'Deduplicate fixed/sticky headers & footers during fullPage capture. Default true.' },
       },
     },
   },
   {
     name: 'tabs',
     description:
-      'List / open / switch / close tabs. New tabs open in the BACKGROUND and become the controlled tab — ' +
-      'the user keeps looking at whatever they were on. Everything except screenshot works fine on a background tab. ' +
-      'Each agent session has its OWN controlled tab; omitting tabId uses this session\'s. ' +
-      'Selecting a tab another session operates warns, not blocks. ' +
-      'With 2+ work-lines (a subagent, two accounts) pass tabId explicitly on EVERY call — the implicit slot ' +
-      'is shared with subagents and a sibling can move it. Label each tab; recover the mapping via action:"list".',
+      'Manage tabs with explicit lifecycle. New tabs open in BACKGROUND and become controlled. ' +
+      'Use action:"borrow" to explicitly request borrowing a user tab with in-page confirmation. ' +
+      'When task finishes, ALWAYS call action:"return" to release borrowed tabs back to the user cleanly.',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'new', 'select', 'close'] },
+        action: { type: 'string', enum: ['list', 'new', 'select', 'close', 'borrow', 'return'] },
         url: { type: 'string' },
         tabId: TAB,
         label: { type: 'string', description: 'With new/select: what this tab is for ("CRM import — batch 2"). Shown in list, page panel, and to the user.' },
+        reason: { type: 'string', description: 'With borrow: explanation displayed in the on-page confirmation overlay why the tab is borrowed.' },
         focus: { type: 'boolean', description: 'Also bring the tab to the foreground. Interrupts the user — off by default.' },
       },
       required: ['action'],
@@ -643,13 +657,20 @@ export async function startMcpServer({ client = 'unknown' } = {}) {
       if (name === 'screenshot' && data.dataUrl) {
         const [head, b64] = data.dataUrl.split(',');
         const mime = /^data:(image\/\w+)/.exec(head)?.[1] || 'image/png';
+        const meta = `[captureId: ${data.captureId || 'cap_live'}] ${data.width || '?'}x${data.height || '?'}px`
+          + (data.fullPage ? ' (full-page)' : '')
+          + (data.scale && data.scale !== 1 ? ` (${Math.round(data.scale * 100)}% 缩放)` : '')
+          + '。若需点击图上特定点，可调用 click 传入 captureId 以及 imageX, imageY。';
         if (args.savePath) {
           fs.mkdirSync(path.dirname(args.savePath), { recursive: true });
           fs.writeFileSync(args.savePath, Buffer.from(b64, 'base64'));
-          return { content: [{ type: 'text', text: `已保存截图 ${Math.round(b64.length * 3 / 4 / 1024)}KB（${mime}${data.scale && data.scale !== 1 ? `，${Math.round(data.scale * 100)}% 缩放` : ''}）→ ${args.savePath}` }] };
+          return { content: [{ type: 'text', text: `已保存截图 ${Math.round(b64.length * 3 / 4 / 1024)}KB（${mime}）→ ${args.savePath}\n${meta}` }] };
         }
         return {
-          content: [{ type: 'image', data: b64, mimeType: mime }],
+          content: [
+            { type: 'text', text: meta },
+            { type: 'image', data: b64, mimeType: mime },
+          ],
         };
       }
       // 二进制只落盘、只报路径——把 base64 倒进 context 是纯粹的浪费

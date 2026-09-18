@@ -84,7 +84,7 @@
   let tabLabel = '';    // agent 开页时声明的「这页是哪条线」（属于 tab，不属于某个主）
   let expanded = false; // 驾驶舱展开还是收成胶囊。偏好落在 chrome.storage.local
   let stats = {};       // sid -> { steps, lastAction, durationSec }
-  let host = null, wrap = null, dock = null;
+  let host = null, wrap = null, dock = null, overlayHost = null;
   let watchdog = null, flashTimer = null, tickTimer = null;
   const actState = new Map();   // sid -> { text, timer } 「刚刚做了什么」的短暂高亮
 
@@ -283,13 +283,34 @@
       .ask .head .dot { animation: none !important; }
     }
 
-    /* ---- ask：人工介入。刻意做成浮条不是遮罩——用户正被请求去操作页面，页面必须能点 ---- */
+    /* ---- 顶部悬浮容器：专供 ask 与 borrow 浮层，置顶居中，不挡页面点击 ---- */
+    .overlay-host {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2147483647;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      pointer-events: none;
+      width: 100%;
+      max-width: 500px;
+      box-sizing: border-box;
+      padding: 0 16px;
+    }
+
+    /* ---- ask：规范化页内 Human-in-the-Loop 浮层 (HelpRequestOverlay) ---- */
     .ask {
-      width: 340px; max-width: calc(100vw - 40px);
-      background: #fff; color: #1a1a1a; border-radius: 14px;
-      box-shadow: 0 12px 40px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.08);
+      width: 100%; max-width: 480px;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      color: #1a1a1a; border-radius: 16px;
+      box-shadow: 0 16px 48px rgba(0,0,0,.22), 0 0 0 1px rgba(249,115,22,.25);
       border: 1px solid rgba(0,0,0,.08); font-size: 14px;
-      overflow: hidden; animation: abIn .22s cubic-bezier(.16,1,.3,1);
+      overflow: hidden; animation: abSlideDown .25s cubic-bezier(.16,1,.3,1);
       pointer-events: auto;
     }
     .ask .head {
@@ -297,22 +318,20 @@
       padding: 13px 16px; background: linear-gradient(135deg,#fff7ed,#ffedd5);
       border-bottom: 1px solid rgba(0,0,0,.06); font-weight: 600; font-size: 14px;
     }
-    .ask .head .dot { width: 8px; height: 8px; background: #f97316; animation: abPulse 1.6s ease-in-out infinite; }
-    .ask .body { padding: 14px 16px 4px; white-space: pre-wrap; word-break: break-word; }
+    .ask .head .dot { width: 8px; height: 8px; border-radius: 50%; background: #f97316; animation: abPulse 1.6s ease-in-out infinite; }
+    .ask .body { padding: 14px 16px 6px; white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.5; }
     .ask .note { width: 100%; box-sizing: border-box; margin: 10px 0 2px; padding: 8px 10px;
                  border: 1px solid #e2e2e2; border-radius: 8px; font: inherit; font-size: 13px;
                  resize: vertical; min-height: 34px; }
     .ask .note:focus { outline: 2px solid #fdba74; outline-offset: -1px; border-color: transparent; }
     .ask .foot { display: flex; gap: 8px; padding: 10px 16px 14px; align-items: center; }
-    .ask .clock { font-size: 12px; color: #9a9a9a; margin-right: auto; font-variant-numeric: tabular-nums; }
-    .ask button { font: inherit; font-size: 13px; border-radius: 8px; padding: 7px 14px;
+    .ask .clock { font-size: 12px; color: #9a9a9a; margin-right: auto; font-variant-numeric: tabular-nums; font-weight: 500; }
+    .ask button { font: inherit; font-size: 13px; border-radius: 8px; padding: 7px 15px;
                   border: 1px solid transparent; cursor: pointer; transition: .15s; }
     .ask .ok { background: #f97316; color: #fff; font-weight: 600; }
     .ask .ok:hover { background: #ea580c; }
     .ask .no { background: #fff; color: #666; border-color: #e2e2e2; }
     .ask .no:hover { background: #f6f6f6; }
-    /* 支付确认：同一个浮条换一身红。这类打断一年遇不上几次，
-       必须一眼就和「帮我解个验证码」区分开——看错了是要花钱的。 */
     .ask.danger .head { background: linear-gradient(135deg,#fef2f2,#fee2e2); }
     .ask.danger .head .dot { background: #dc2626; }
     .ask.danger .ok { background: #dc2626; }
@@ -320,12 +339,57 @@
     .ask .what { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: #f8f8f8;
                  font-size: 13px; word-break: break-all; }
     .ask .amount { font-weight: 700; font-size: 16px; color: #dc2626; }
+
+    /* ---- 标签页借用授权浮层 (BorrowConfirmationOverlay) ---- */
+    .borrow-overlay {
+      width: 100%; max-width: 480px;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      color: #1a1a1a; border-radius: 16px;
+      box-shadow: 0 16px 48px rgba(0,0,0,.22), 0 0 0 1px rgba(37,99,235,.25);
+      border: 1px solid rgba(0,0,0,.08); font-size: 14px;
+      overflow: hidden; animation: abSlideDown .25s cubic-bezier(.16,1,.3,1);
+      pointer-events: auto;
+    }
+    .borrow-overlay .head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 13px 16px; background: linear-gradient(135deg,#eff6ff,#dbeafe);
+      border-bottom: 1px solid rgba(0,0,0,.06); font-weight: 600; font-size: 14px;
+    }
+    .borrow-overlay .head .dot { width: 8px; height: 8px; border-radius: 50%; background: #2563eb; }
+    .borrow-overlay .body { padding: 14px 16px 8px; white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.5; }
+    .borrow-overlay .foot { display: flex; gap: 8px; padding: 10px 16px 14px; align-items: center; justify-content: flex-end; }
+    .borrow-overlay button { font: inherit; font-size: 13px; border-radius: 8px; padding: 7px 15px; border: 1px solid transparent; cursor: pointer; transition: .15s; }
+    .borrow-overlay .ok { background: #2563eb; color: #fff; font-weight: 600; }
+    .borrow-overlay .ok:hover { background: #1d4ed8; }
+    .borrow-overlay .no { background: #fff; color: #666; border-color: #e2e2e2; }
+    .borrow-overlay .no:hover { background: #f6f6f6; }
+
+    /* ---- 提示消息 Toast ---- */
+    .toast {
+      padding: 9px 18px;
+      background: rgba(17, 24, 39, 0.92);
+      backdrop-filter: blur(12px);
+      color: #fff; font-size: 13px; font-weight: 500;
+      border-radius: 24px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.2);
+      animation: abSlideDown .2s cubic-bezier(.16,1,.3,1);
+      pointer-events: auto;
+    }
+
+    @keyframes abSlideDown {
+      from { opacity: 0; transform: translateY(-16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
     @media (prefers-color-scheme: dark) {
-      .ask { background: #1c1c1e; color: #f2f2f2; border-color: rgba(255,255,255,.1); }
+      .ask, .borrow-overlay { background: rgba(28,28,30,.96); color: #f2f2f2; border-color: rgba(255,255,255,.1); }
       .ask .head { background: linear-gradient(135deg,#3b2a1a,#2c1f14); border-bottom-color: rgba(255,255,255,.07); }
+      .borrow-overlay .head { background: linear-gradient(135deg,#1e293b,#0f172a); border-bottom-color: rgba(255,255,255,.07); }
       .ask .note { background: #2a2a2c; border-color: #3a3a3c; color: #f2f2f2; }
-      .ask .no { background: #2a2a2c; color: #ccc; border-color: #3a3a3c; }
-      .ask .no:hover { background: #333; }
+      .ask .no, .borrow-overlay .no { background: #2a2a2c; color: #ccc; border-color: #3a3a3c; }
+      .ask .no:hover, .borrow-overlay .no:hover { background: #333; }
       .ask.danger .head { background: linear-gradient(135deg,#3f1d1d,#2a1414); }
       .ask .what { background: #2a2a2c; }
       .ask .amount { color: #f87171; }
@@ -388,6 +452,10 @@
     own.className = 'own';
     dock.appendChild(own);
     wrap.appendChild(dock);
+
+    overlayHost = document.createElement('div');
+    overlayHost.className = 'overlay-host';
+    wrap.appendChild(overlayHost);
     root.append(style, wrap);
     document.documentElement.appendChild(host);
     if (stealthed) host.style.visibility = 'hidden';
@@ -841,8 +909,8 @@
     askEl.querySelector('.ok').addEventListener('click', () => closeAsk('continued', noteEl?.value));
     askEl.querySelector('.no').addEventListener('click', () => closeAsk('cancelled', noteEl?.value));
 
-    // 挂在 own 之外：会话区重画时不触碰 ask（输入框的焦点经不起挪动）
-    wrap.querySelector('.dock').appendChild(askEl);
+    // 挂在 overlayHost 顶部置顶居中展示
+    overlayHost.appendChild(askEl);
 
     // 倒计时。不显示的话用户不知道自己还有多久，而超时后 agent 那边已经走了，
     // 他还在慢慢操作——两边对不上。
@@ -853,6 +921,56 @@
       clock.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
       if (left <= 0) closeAsk('timed_out', noteEl?.value);
     }, 500);
+  }
+
+  // ---------- borrow：借用确认 ----------
+  let borrowEl = null;
+  let borrowOutcome = null;
+
+  function closeBorrow(result) {
+    if (borrowEl) { borrowEl.remove(); borrowEl = null; }
+    borrowOutcome = { outcome: result };
+    maybeTeardown();
+  }
+
+  function showBorrow(msg) {
+    ensureHost();
+    if (borrowEl) closeBorrow('cancelled');
+    borrowOutcome = null;
+
+    borrowEl = document.createElement('div');
+    borrowEl.className = 'borrow-overlay';
+    borrowEl.setAttribute('role', 'dialog');
+    borrowEl.setAttribute('aria-live', 'polite');
+
+    const head = document.createElement('div'); head.className = 'head';
+    const dot = document.createElement('span'); dot.className = 'dot';
+    const t = document.createElement('span'); t.className = 't';
+    t.textContent = '🤖 AI Agent 申请临时借用此标签页';
+    head.append(dot, t);
+
+    const body = document.createElement('div'); body.className = 'body';
+    body.textContent = msg.reason || 'Agent 请求临时借用此标签页执行自动化任务。借用期间将在后台操作，任务完成后自动归还。';
+
+    const foot = document.createElement('div'); foot.className = 'foot';
+    const btnNo = document.createElement('button'); btnNo.className = 'no'; btnNo.textContent = '拒绝';
+    const btnOk = document.createElement('button'); btnOk.className = 'ok'; btnOk.textContent = '同意借用';
+    foot.append(btnNo, btnOk);
+
+    borrowEl.append(head, body, foot);
+    btnOk.addEventListener('click', () => closeBorrow('borrowed'));
+    btnNo.addEventListener('click', () => closeBorrow('denied'));
+
+    overlayHost.appendChild(borrowEl);
+  }
+
+  function showToast(message) {
+    ensureHost();
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.textContent = message;
+    overlayHost.appendChild(t);
+    setTimeout(() => { t.remove(); maybeTeardown(); }, 3000);
   }
 
   // 高亮：把用户的视线直接送到该操作的地方，省掉「在哪儿？」这一步。
@@ -940,6 +1058,9 @@
       // show 立即返回，不攥着 sendResponse 等人——见 closeAsk 上面那段
       if (msg.__abAsk === 'show') { showAsk(msg); sendResponse({ shown: true }); return true; }
       if (msg.__abAsk === 'poll') { sendResponse(askOutcome || { pending: true }); return true; }
+      if (msg.__abAsk === 'borrow') { showBorrow(msg); sendResponse({ shown: true }); return true; }
+      if (msg.__abAsk === 'pollBorrow') { sendResponse(borrowOutcome || { pending: true }); return true; }
+      if (msg.__abAsk === 'toast') { showToast(msg.message || ''); sendResponse({ ok: true }); return true; }
       if (msg.__abAsk === 'flash') {
         const els = (msg.selectors || []).map((s) => {
           try { return document.querySelector(s); } catch { return null; }
