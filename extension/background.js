@@ -430,9 +430,31 @@ async function multiLineNote(sid, explicitTab, cmd, resolved) {
 // 而一个会话「结束」的特征恰恰是**再也没有命令过来**。没有这条推送，
 // 用户关掉终端窗口之后，那个页面上的标记会一直挂着，直到下一个会话碰巧
 // 操作同一个标签页。
+let sweptDead = false;
+async function sweepDeadSessions(liveSids = []) {
+  if (sweptDead) return;
+  sweptDead = true;
+  try {
+    const live = new Set(Array.isArray(liveSids) ? liveSids : []);
+    const all = await chrome.storage.local.get(null);
+    const prefixes = [SLOT_PREFIX, REG_PREFIX, 'agentGroup:', 'slotTouch:', 'actLog:', 'sidClient:'];
+    const victims = [];
+    for (const k of Object.keys(all)) {
+      for (const p of prefixes) {
+        if (k.startsWith(p)) {
+          const sid = k.slice(p.length);
+          if (!live.has(sid)) victims.push(k);
+          break;
+        }
+      }
+    }
+    if (victims.length) await chrome.storage.local.remove(victims);
+  } catch {}
+}
+
 function onBridgeEvent(msg) {
   if (msg.event !== 'sessions') return;
-  // 先落盘再重算：resyncMarks 里的 ownersOfTab 读的就是 storage 名单
+  void sweepDeadSessions(msg.live);
   return noteSession(null, null, msg.live).then(() => resyncMarks());
 }
 
@@ -2657,7 +2679,10 @@ const veilMarks = (tabId, on) =>
 // 「没 alarm + 没 socket」就等于扩展永久哑掉，而且一声不响。
 // create 同名 alarm 是幂等的（覆盖），重复调用没有代价。
 chrome.alarms.create('ab-keepalive', { periodInMinutes: 0.5 });
-chrome.runtime.onStartup.addListener(() => chrome.alarms.create('ab-keepalive', { periodInMinutes: 0.5 }));
+chrome.runtime.onStartup.addListener(() => {
+  chrome.alarms.create('ab-keepalive', { periodInMinutes: 0.5 });
+  void sweepDeadSessions([]);
+});
 // SW 上一条命里挂着的调试会话，浏览器还替它留着——连同那条黄带子。
 // 每次启动扫一遍，否则用户会看到一条永远摘不掉的「已开始调试此浏览器」。
 cdp.reapOrphans();
