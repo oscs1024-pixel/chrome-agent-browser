@@ -468,8 +468,19 @@ const liveOf = (ctx) => new Set(Array.isArray(ctx?.live) ? ctx.live : []);
 // 谁占着这个 tab？只算**还连着**的会话——已经结束的会话留下的槽不算数，
 // 否则关掉一个 Claude Code 窗口之后，它的标签页就再没人能接手了。
 async function liveOwnersOf(tabId, exceptSid, live) {
-  const all = await chrome.storage.local.get(null);
-  return sidsOnTab(all, tabId).filter((sid) => sid !== exceptSid && live.has(sid));
+  const targetSids = Array.from(live).filter((sid) => sid !== exceptSid);
+  if (!targetSids.length) return [];
+  const queryKeys = targetSids.flatMap((sid) => [agentTabKey(sid), regKey(sid)]);
+  const stored = await chrome.storage.local.get(queryKeys);
+  const matched = [];
+  for (const sid of targetSids) {
+    const slotTab = stored[agentTabKey(sid)];
+    const regTabs = stored[regKey(sid)];
+    if (slotTab === tabId || (Array.isArray(regTabs) && regTabs.includes(tabId))) {
+      matched.push(sid);
+    }
+  }
+  return matched;
 }
 
 // 记下这个会话的受控 tab，并顺手把最老的槽挤掉
@@ -634,11 +645,19 @@ const liveList = async () => (await chrome.storage.session.get(LIVE_SIDS))[LIVE_
 async function ownersOfTab(tabId) {
   const lives = new Set(await liveList());
   if (!lives.size) return [];
-  const all = await chrome.storage.local.get(null);
-  const sids = sidsOnTab(all, tabId).filter((sid) => lives.has(sid));
+  const liveArr = Array.from(lives);
+  const queryKeys = liveArr.flatMap((sid) => [agentTabKey(sid), regKey(sid), sidClientKey(sid)]);
+  const stored = await chrome.storage.local.get(queryKeys);
+  const sids = [];
+  for (const sid of liveArr) {
+    const slotTab = stored[agentTabKey(sid)];
+    const regTabs = stored[regKey(sid)];
+    if (slotTab === tabId || (Array.isArray(regTabs) && regTabs.includes(tabId))) {
+      sids.push(sid);
+    }
+  }
   if (!sids.length) return [];
-  const clients = await chrome.storage.local.get(sids.map(sidClientKey));
-  return sids.map((sid) => identityOf(sid, clients[sidClientKey(sid)]));
+  return sids.map((sid) => identityOf(sid, stored[sidClientKey(sid)]));
 }
 
 // 判据必须是「收到了 mark.js 的回执」，不能是「sendMessage 没报错」：
@@ -780,26 +799,17 @@ async function syncGroup(tabId, owners) {
   try {
     if (!chrome.tabGroups) return;   // 旧 Chrome 没有这个 API
     const tab = await chrome.tabs.get(tabId);
-    const all = await chrome.storage.local.get(null);
-    const ours = new Map(Object.entries(all)
-      .filter(([k]) => k.startsWith('agentGroup:'))
-      .map(([k, v]) => [k.slice('agentGroup:'.length), v]));
-
-    // 这一页没有主：还挂在我们的组里就摘出来。组空了 Chrome 会自己解散它。
     if (!owners.length) {
       if (tab.groupId === -1) return;
-      for (const [sid, gid] of ours) {
-        if (gid !== tab.groupId) continue;
-        const g = await chrome.tabGroups.get(gid).catch(() => null);
-        if (g && groupTitleOk(g.title, sid)) await chrome.tabs.ungroup(tabId);
-        return;
+      const g = await chrome.tabGroups.get(tab.groupId).catch(() => null);
+      if (g && (g.title?.includes('·') || g.title?.startsWith('p'))) {
+        await chrome.tabs.ungroup(tabId);
       }
       return;
     }
-
-    // 多主时跟第一个——组只有一个，双色条纹画不进标签栏；页内边框负责说清「有两个主」
     const o = owners[0];
-    const stored = ours.get(o.sid);
+    const key = groupKey(o.sid);
+    const { [key]: stored } = await chrome.storage.local.get(key);
     if (tab.groupId !== -1) {
       if (tab.groupId === stored) {
         const g = await chrome.tabGroups.get(stored).catch(() => null);
@@ -811,7 +821,6 @@ async function syncGroup(tabId, owners) {
         }
         return;
       }
-      if (![...ours.values()].includes(tab.groupId)) return;      // 用户的组，不碰
     }
     // 已登记的组仍存在、身份匹配且在同一个窗口就归队，否则新建。
     // 跨窗口不归队：group({groupId}) 会把标签页搬进另一个窗口。
@@ -1574,9 +1583,9 @@ async function performCore(id, cmd, p, { blockSensitive = false } = {}, ctx) {
     if (!Number.isFinite(params.imageX) || !Number.isFinite(params.imageY)) {
       throw err('INVALID_PARAMS', '使用 captureId 点击时必须提供有效的 imageX 与 imageY 数字坐标');
     }
-    const capKey = `cap_${params.captureId}`;
-    const stored = await chrome.storage.session.get(capKey).catch(() => ({}));
-    const cap = stored[capKey];
+    const capId = params.captureId.startsWith('cap_') ? params.captureId : `cap_${params.captureId}`;
+    const stored = await chrome.storage.session.get([capId, `cap_${capId}`]).catch(() => ({}));
+    const cap = stored[capId] || stored[`cap_${capId}`];
     if (!cap) {
       throw err('CAPTURE_EXPIRED', `截图 ${params.captureId} 已过期或不存在。SW 回收或会话超时后需重新调用 screenshot 截图后再点击。`);
     }
@@ -2385,7 +2394,7 @@ const HANDLERS = {
     }
     const captureId = 'cap_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
     await chrome.storage.session.set({
-      [`cap_${captureId}`]: {
+      [captureId]: {
         captureId,
         tabId: id,
         scale: res.scale || 1,
