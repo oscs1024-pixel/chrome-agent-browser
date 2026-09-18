@@ -48,14 +48,20 @@ switch (cmd) {
     // learnings 是纯本地读写，不需要桥和浏览器
     if (argv[1] === 'learnings') {
       const { getLearnings, saveLearnings } = await import('./lib/learnings.js');
-      const p = argv[2] ? JSON.parse(argv[2]) : {};
+      let p = {};
+      if (argv[2]) {
+        try { p = JSON.parse(argv[2]); } catch (err) { console.error(`参数不是合法 JSON: ${err.message}`); process.exit(1); }
+      }
       console.log(p.save != null ? saveLearnings(p.domain, p.save) : getLearnings(p.domain));
       break;
     }
     const { BridgeClient } = await import('./lib/rpc.js');
     const c = new BridgeClient({ client: 'cli' });
     await c.connect();
-    const params = argv[2] ? JSON.parse(argv[2]) : {};
+    let params = {};
+    if (argv[2]) {
+      try { params = JSON.parse(argv[2]); } catch (err) { console.error(`参数不是合法 JSON: ${err.message}`); process.exit(1); }
+    }
     if (argv[1] === 'upload' && params.path) {
       if (params.dropSelector) {
         const buf = fs.readFileSync(params.path);
@@ -140,8 +146,11 @@ switch (cmd) {
     const lines = fs.existsSync(AUDIT_FILE) ? fs.readFileSync(AUDIT_FILE, 'utf8').trim().split('\n').slice(-n) : [];
     if (!lines.length) console.log('还没有审计记录。');
     for (const l of lines) {
-      const e = JSON.parse(l);
-      console.log(`${e.t.slice(11, 19)}  ${(e.ev + '        ').slice(0, 8)} ${e.cmd || ''} ${e.ok === false ? '✗ ' + (e.error || '') : ''}`);
+      if (!l.trim()) continue;
+      try {
+        const e = JSON.parse(l);
+        console.log(`${e.t.slice(11, 19)}  ${(e.ev + '        ').slice(0, 8)} ${e.cmd || ''} ${e.ok === false ? '✗ ' + (e.error || '') : ''}`);
+      } catch {}
     }
     break;
   }
@@ -340,10 +349,11 @@ function probe(info) {
     const ws = new WebSocket(`ws://127.0.0.1:${info.port}`);
     const t = setTimeout(() => { ws.close(); resolve({ ok: false, error: '超时' }); }, 3000);
     ws.onerror = () => { clearTimeout(t); resolve({ ok: false, error: '连接被拒' }); };
-    ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', role: 'agent', token: info.token, client: 'doctor', sessionId: `doctor:p${process.pid}`, v: 1 }));
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', role: 'agent', token: info.token, client: 'doctor', probe: true, sessionId: `doctor:p${process.pid}`, v: 1 }));
     ws.onmessage = (ev) => {
       clearTimeout(t);
-      const m = JSON.parse(ev.data);
+      let m;
+      try { m = JSON.parse(ev.data); } catch { ws.close(); return resolve({ ok: false, error: '非法响应' }); }
       ws.close();
       resolve(m.type === 'welcome'
         ? { ok: true, extensionOnline: m.extensionOnline, extensionVersion: m.extensionVersion, versionMismatch: m.versionMismatch, extensions: m.extensions || [] }

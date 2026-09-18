@@ -43,6 +43,13 @@ function resolveKey(domain) {
   let d = normalize(domain);
   if (!d) return null;
   const parts = d.split('.');
+  if (parts.length === 1) {
+    if (known.has(d)) return d;
+    if (ALIAS[d]) return ALIAS[d];
+    for (const k of known) {
+      if (k.split('.')[0] === d) return k;
+    }
+  }
   for (let i = 0; i < parts.length - 1; i++) {
     const cand = parts.slice(i).join('.');
     const key = ALIAS[cand] || cand;

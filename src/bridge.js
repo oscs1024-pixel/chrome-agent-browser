@@ -12,6 +12,11 @@ import { DEFAULT_PORT, writeBridgeInfo, newToken, tokenEquals, audit, ensureHome
 import { extensionId } from './install.js';
 
 const EXPECTED_EXT_ID = extensionId();
+export const KNOWN_EXTENSION_IDS = new Set([
+  'ljnomddomgifjdddbefdjmgekhdiijnn', // 本地固定 key 派生 ID
+  ...(process.env.CHROME_AGENT_BROWSER_ALLOWED_EXT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
+]);
+if (EXPECTED_EXT_ID) KNOWN_EXTENSION_IDS.add(EXPECTED_EXT_ID);
 const PORTS = [8899, 8900, 8901, 8902, 8903];
 import { VERSION } from './lib/version.js';
 // 纯字符串判定、不碰 chrome API，所以桥这边直接复用，不再抄一份
@@ -116,8 +121,8 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
       if (typeof origin === 'string' && origin.startsWith('chrome-extension://')) {
         const extId = origin.slice(19).replace(/\/$/, '');
         info.req.originExtId = extId;
-        if (expectedExtId && extId !== expectedExtId) {
-          audit({ ev: 'reject_extension_origin', origin, expected: expectedExtId });
+        if (expectedExtId && !KNOWN_EXTENSION_IDS.has(extId)) {
+          audit({ ev: 'reject_extension_origin', origin, expected: Array.from(KNOWN_EXTENSION_IDS) });
           return done(false, 403, 'unauthorized extension id');
         }
         return done(true);
@@ -215,8 +220,8 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
         audit({ ev: 'reject_extid_mismatch', originExtId: ws.originExtId, helloExtId: msg.extId });
         return ws.close(4003, 'extension id mismatch with origin');
       }
-      if (expectedExtId && ws.originExtId && ws.originExtId !== expectedExtId) {
-        audit({ ev: 'reject_unauthorized_extension', originExtId: ws.originExtId, expected: expectedExtId });
+      if (expectedExtId && ws.originExtId && !KNOWN_EXTENSION_IDS.has(ws.originExtId)) {
+        audit({ ev: 'reject_unauthorized_extension', originExtId: ws.originExtId, expected: Array.from(KNOWN_EXTENSION_IDS) });
         return ws.close(4003, 'unauthorized extension id');
       }
       ws.extVersion = msg.version || '0.1.0';
@@ -257,6 +262,19 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
       if (!tokenEquals(msg.token || '', token)) {
         audit({ ev: 'reject_token', client: msg.client });
         return ws.close(4001, 'bad token');
+      }
+      // 探活请求（如 doctor）：回传状态即可，不加进 agents 列表，不挤占会话名额，不广播在线变更
+      if (msg.probe) {
+        const ext = primary();
+        return send(ws, {
+          type: 'welcome', bridge: VERSION, v: PROTOCOL,
+          extensionOnline: !!ext,
+          extensionVersion: ext?.extVersion,
+          versionMismatch: !!ext && ext.extVersion !== VERSION,
+          extensions: liveExtensions().map((e) => ({
+            id: e.instanceId, version: e.extVersion, chrome: e.chromeVersion, headless: e.headless,
+          })),
+        });
       }
       agents.add(ws);
       ws.helloed = true;

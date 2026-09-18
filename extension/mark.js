@@ -784,7 +784,7 @@
     clearTimeout(dodgeTimer);
     dodgeTimer = setTimeout(() => wrap && dock.classList.remove('dodge'), 1600);
   }
-
+  // 虚拟光标钩子：同时暴露 __abCursor 与 __hcCursor（兼容姊妹扩展 huashu-chrome 历史命名空间）
   window.__abCursor = window.__hcCursor = (x, y, kind) => {
     if (!TOP || !wrap || !owners.length) return;
     const c = wrap.querySelector('.cursor');
@@ -1029,7 +1029,7 @@
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => wrap?.classList.remove('lit'), 420);
   }
-
+  // 消息入口：同时应答 __ab* 与 __hc* 协议动词，确保本扩展与姊妹扩展 huashu-chrome 调用方无缝互通
   chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     const markVerb = msg?.__abMark ?? msg?.__hcMark;
     if (markVerb !== undefined) {

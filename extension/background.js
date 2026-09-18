@@ -213,7 +213,11 @@ async function directConnect() {
         try { m = JSON.parse(ev.data); } catch { try { sock.close(); } catch {} return reject(new Error('json')); }
         if (m.type !== 'welcome') { clearTimeout(t); try { sock.close(); } catch {} return reject(new Error('rejected')); }
         clearTimeout(t);
-        resolve({ sock, m });
+        const buffered = [];
+        sock.onmessage = (e) => buffered.push(e.data);
+        sock.onerror = null;
+        sock.onclose = null;
+        resolve({ sock, m, buffered });
       };
       sock.onerror = () => { clearTimeout(t); reject(new Error('error')); };
       sock.onclose = () => { clearTimeout(t); reject(new Error('closed')); };
@@ -245,6 +249,14 @@ async function directConnect() {
       startDirectPing();
       setBadge(true);
       noteBridgeVersion(directBridgeVersion);
+      for (const raw of (buffered || [])) {
+        try {
+          const x = JSON.parse(raw);
+          if (x.type === 'pong') continue;
+          if (x.type === 'ping') { if (sock.readyState === 1) sock.send(JSON.stringify({ type: 'pong' })); continue; }
+          onMessage(x);
+        } catch {}
+      }
       void flushOutbox(async (msg) => { if (directWs?.readyState === 1) directWs.send(JSON.stringify(msg)); });
       return;
     }
@@ -535,10 +547,12 @@ async function getActiveTabId(sid, ctx) {
       try { await chrome.tabs.get(mine); return mine; } catch { await chrome.storage.local.remove([key, `slotTouch:${sid}`]); } // 槽里的 tab 已关，自愈
     }
   }
-  const { activeTabId } = await chrome.storage.local.get('activeTabId');
+  const iid = await instanceId();
+  const { [`activeTabId_${iid}`]: instTab, activeTabId: globalTab } = await chrome.storage.local.get([`activeTabId_${iid}`, 'activeTabId']);
+  const activeTabId = instTab || globalTab;
   if (activeTabId) {
     let tab = null;
-    try { tab = await chrome.tabs.get(activeTabId); } catch { await chrome.storage.local.remove('activeTabId'); }
+    try { tab = await chrome.tabs.get(activeTabId); } catch { await chrome.storage.local.remove(['activeTabId', `activeTabId_${iid}`]); }
     if (tab) {
       // 这才是「两个 agent 撞进同一个页面」唯一能拦住的地方。
       // 以前这里无条件继承，只在返回里加一句警告——而警告是在操作**已经跑完**
@@ -560,7 +574,10 @@ async function getActiveTabId(sid, ctx) {
   }
   throw err('NO_TAB', '还没有受控标签页——先 tabs(action:"new", url:…) 开一个');
 }
-const setActiveTabId = (id) => chrome.storage.local.set({ activeTabId: id });
+const setActiveTabId = async (id) => {
+  const iid = await instanceId();
+  return chrome.storage.local.set({ activeTabId: id, [`activeTabId_${iid}`]: id });
+};
 
 async function resolveTab(tabId, sid, ctx) {
   if (tabId) {
@@ -1562,6 +1579,9 @@ async function performCore(id, cmd, p, { blockSensitive = false } = {}, ctx) {
     const cap = stored[capKey];
     if (!cap) {
       throw err('CAPTURE_EXPIRED', `截图 ${params.captureId} 已过期或不存在。SW 回收或会话超时后需重新调用 screenshot 截图后再点击。`);
+    }
+    if (cap.tabId && cap.tabId !== id) {
+      throw err('TAB_MISMATCH', `截图 ${params.captureId} 归属于标签页 [${cap.tabId}]，无法在当前标签页 [${id}] 上使用其像素坐标`);
     }
     const scale = cap.scale || 1;
     params.x = Math.round(params.imageX / scale);

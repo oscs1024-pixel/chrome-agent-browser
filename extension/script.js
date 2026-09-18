@@ -18,6 +18,10 @@
 export const REPEAT_MAX = 25;       // 单个 repeat 的轮数上限
 export const REPEAT_DEFAULT = 10;   // 不写 max 时的默认轮数
 export const EXEC_BUDGET = 60;      // 单次 act 实际执行的原子步数上限（防 repeat 失控）
+// 换算系数与超时余量说明：
+// 单步最坏开销约 8s（含定位、滚动、合成与等待稳定），加上初始 20s 余量：
+// 60 步 × 8s + 20s = 500s，距离桥与 MCP 客户端的总超时阈值 600s 留有 100s 安全缓冲。
+// 若单步耗时极高，建议用户减小 repeat.max 或拆解为多个独立 act 批次。
 
 const BLOCKS = new Set(['repeat', 'if', 'assert']);
 
