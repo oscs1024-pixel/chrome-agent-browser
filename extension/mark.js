@@ -434,6 +434,7 @@
     cursor.className = 'cursor';
     const glow = document.createElement('div');
     glow.className = 'glow';
+    // <svg viewBox="0 0 26 26"
     const pointer = svgEl('svg', { width: '27', height: '27', viewBox: '0 0 26 26', 'aria-hidden': 'true' });
     pointer.appendChild(svgEl('path', {
       d: 'M4 2 L4 21.5 L9.2 16.8 L12.8 24.5 L16.5 22.8 L12.9 15.2 L19.8 15.2 Z',
@@ -784,7 +785,7 @@
     dodgeTimer = setTimeout(() => wrap && dock.classList.remove('dodge'), 1600);
   }
 
-  window.__abCursor = (x, y, kind) => {
+  window.__abCursor = window.__hcCursor = (x, y, kind) => {
     if (!TOP || !wrap || !owners.length) return;
     const c = wrap.querySelector('.cursor');
     c.classList.add('on');
@@ -1030,38 +1031,32 @@
   }
 
   chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
-    if (msg && msg.__abMark !== undefined) {
-      // 非顶层框架照样要应答 ping，否则 background 会以为脚本没注入，
-      // 于是每条命令都重注一次
-      if (msg.__abMark === 'ping') { sendResponse({ pong: true, top: TOP }); return true; }
-      if (msg.__abMark === 'set') {
+    const markVerb = msg?.__abMark ?? msg?.__hcMark;
+    if (markVerb !== undefined) {
+      if (markVerb === 'ping') { sendResponse({ pong: true, top: TOP }); return true; }
+      if (markVerb === 'set') {
         logs = msg.logs || {};
         intents = msg.intents || {};
         stats = msg.stats || {};
         plan = Array.isArray(msg.plan) ? msg.plan : [];
         tabLabel = typeof msg.tabLabel === 'string' ? msg.tabLabel : '';
         owners = Array.isArray(msg.owners) ? msg.owners.filter((o) => o && o.sid) : [];
-        // 先记动作再画：act 的高亮状态要出现在这一次渲染里，分开就是两次渲染
         if (msg.act && msg.sid) recordAct(msg.sid, msg.act);
         if (TOP) { render(); if (msg.act) flashEdges(); }
         sendResponse({ ok: true });
         return true;
       }
-      // clear 走完整 render 而不是直接 teardown：ask 还挂着时 host 必须留下，
-      // 但边框/胶囊/标题这些「存在感」要立刻消失——直接拆会因 ask 在场而早退，
-      // 留一屏已经没主的标记
-      if (msg.__abMark === 'clear') { owners = []; lastOwners = []; plan = []; render(); sendResponse({ ok: true }); return true; }
-      if (msg.__abMark === 'stealth') { setStealth(msg.on); sendResponse({ ok: true }); return true; }
-      return;
+      if (markVerb === 'clear' || msg.__hcMark === 'clear') { owners = []; lastOwners = []; plan = []; render(); sendResponse({ ok: true }); return true; }
+      if (markVerb === 'stealth' || msg.__hcMark === 'stealth') { setStealth(msg.on); sendResponse({ ok: true }); return true; }
     }
-    if (msg && msg.__abAsk !== undefined) {
-      // show 立即返回，不攥着 sendResponse 等人——见 closeAsk 上面那段
-      if (msg.__abAsk === 'show') { showAsk(msg); sendResponse({ shown: true }); return true; }
-      if (msg.__abAsk === 'poll') { sendResponse(askOutcome || { pending: true }); return true; }
-      if (msg.__abAsk === 'borrow') { showBorrow(msg); sendResponse({ shown: true }); return true; }
-      if (msg.__abAsk === 'pollBorrow') { sendResponse(borrowOutcome || { pending: true }); return true; }
-      if (msg.__abAsk === 'toast') { showToast(msg.message || ''); sendResponse({ ok: true }); return true; }
-      if (msg.__abAsk === 'flash') {
+    const askVerb = msg?.__abAsk ?? msg?.__hcAsk;
+    if (askVerb !== undefined) {
+      if (askVerb === 'show' || msg.__hcAsk === 'show') { showAsk(msg); sendResponse({ shown: true }); return true; }
+      if (askVerb === 'poll' || msg.__hcAsk === 'poll') { sendResponse(askOutcome || { pending: true }); return true; }
+      if (askVerb === 'borrow') { showBorrow(msg); sendResponse({ shown: true }); return true; }
+      if (askVerb === 'pollBorrow') { sendResponse(borrowOutcome || { pending: true }); return true; }
+      if (askVerb === 'toast') { showToast(msg.message || ''); sendResponse({ ok: true }); return true; }
+      if (askVerb === 'flash' || msg.__hcAsk === 'flash') {
         const els = (msg.selectors || []).map((s) => {
           try { return document.querySelector(s); } catch { return null; }
         }).filter(Boolean);
@@ -1070,7 +1065,7 @@
         sendResponse({ matched: els.length });
         return true;
       }
-      if (msg.__abAsk === 'abort') { closeAsk('cancelled', '被 agent 取消'); sendResponse({ ok: true }); return true; }
+      if (askVerb === 'abort' || msg.__hcAsk === 'abort') { closeAsk('cancelled', '被 agent 取消'); sendResponse({ ok: true }); return true; }
     }
   });
 

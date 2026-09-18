@@ -6,8 +6,13 @@
 //
 // 安全边界就在 verifyClient：浏览器发起 WS 时强制带 Origin 且不可伪造，
 // 网页的 Origin 是自己的域名，扩展的是 chrome-extension://<id>。只放后者进来。
+import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { DEFAULT_PORT, writeBridgeInfo, newToken, tokenEquals, audit, ensureHome } from './lib/paths.js';
+import { extensionId } from './install.js';
+
+const EXPECTED_EXT_ID = extensionId();
+const PORTS = [8899, 8900, 8901, 8902, 8903];
 import { VERSION } from './lib/version.js';
 // 纯字符串判定、不碰 chrome API，所以桥这边直接复用，不再抄一份
 import { scrubProse } from '../extension/redact.js';
@@ -23,8 +28,8 @@ const ORPHAN_GRACE_MS = 15000;       // 扩展断开时在途命令的宽限：�
 
 // writeInfo=false 供测试用：不写 bridge.json，否则测试桥的 token 会盖掉
 // 真在跑的那个桥，用户所有 agent 会话当场断连。
-export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo = true, orphanGraceMs = ORPHAN_GRACE_MS,
-  silenceMs = EXT_SILENCE_MS, probeMs = EXT_PROBE_MS, tickMs = 20000 } = {}) {
+export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo = true, expectedExtId = (writeInfo ? EXPECTED_EXT_ID : null), orphanGraceMs = ORPHAN_GRACE_MS,
+  silenceMs = EXT_SILENCE_MS, probeMs = EXT_PROBE_MS, tickMs = 20000, autoPort = (port === DEFAULT_PORT) } = {}) {
   ensureHome();
 
   const agents = new Set();      // role=agent 的连接
@@ -96,22 +101,35 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
   }
   const extLabel = (ws) => `Chrome ${ws.chromeVersion || '?'}${ws.headless ? ' · headless' : ''} · 扩展 ${ws.extVersion}`;
 
+  let activePort = port;
+  const server = http.createServer((_req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+
   const wss = new WebSocketServer({
-    host: '127.0.0.1',
-    port,
+    server,
+    maxPayload: 64 * 1024 * 1024,
     verifyClient: (info, done) => {
       const origin = info.req.headers.origin;
       if (origin === undefined) return done(true);              // Node 侧，进握手后验 token
-      if (typeof origin === 'string' && origin.startsWith('chrome-extension://')) return done(true);
+      if (typeof origin === 'string' && origin.startsWith('chrome-extension://')) {
+        const extId = origin.slice(19).replace(/\/$/, '');
+        info.req.originExtId = extId;
+        if (expectedExtId && extId !== expectedExtId) {
+          audit({ ev: 'reject_extension_origin', origin, expected: expectedExtId });
+          return done(false, 403, 'unauthorized extension id');
+        }
+        return done(true);
+      }
       audit({ ev: 'reject_origin', origin });                   // 网页想连桥——堵在握手之前
       done(false, 403, 'forbidden origin');
     },
   });
-
   wss.on('connection', (ws, req) => {
     const origin = req.headers.origin;
     ws.isExtension = typeof origin === 'string' && origin.startsWith('chrome-extension://');
-    ws.helloed = false;
+    ws.originExtId = req.originExtId || (ws.isExtension ? origin.slice(19).replace(/\/$/, '') : null);
     ws.connId = ++connSeq;
     ws.lastRx = Date.now();
 
@@ -192,16 +210,23 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
 
     if (msg.role === 'extension') {
       if (!ws.isExtension) return ws.close(4003, 'role/origin mismatch');
-      if (msg.version !== VERSION) {
-        log(`⚠️  版本不一致被拒：扩展 ${msg.version} vs 桥 ${VERSION} —— 去 chrome://extensions 重载扩展`);
-        return ws.close(4010, 'version mismatch');
+      const normalizedExtId = (msg.extId || '').replace(/^chrome-extension:\/\//, '').replace(/\/$/, '');
+      if (ws.originExtId && normalizedExtId && ws.originExtId !== normalizedExtId) {
+        audit({ ev: 'reject_extid_mismatch', originExtId: ws.originExtId, helloExtId: msg.extId });
+        return ws.close(4003, 'extension id mismatch with origin');
       }
-      if (typeof msg.instanceId !== 'string' || !msg.instanceId) return ws.close(4000, 'instanceId required');
-      ws.helloed = true;
-      ws.extVersion = msg.version;
+      if (expectedExtId && ws.originExtId && ws.originExtId !== expectedExtId) {
+        audit({ ev: 'reject_unauthorized_extension', originExtId: ws.originExtId, expected: expectedExtId });
+        return ws.close(4003, 'unauthorized extension id');
+      }
+      ws.extVersion = msg.version || '0.1.0';
+      if (ws.extVersion !== VERSION) {
+        log(`⚠️  版本不一致：扩展 ${ws.extVersion} vs 桥 ${VERSION} —— 去 chrome://extensions 重载扩展`);
+      }
       ws.chromeVersion = msg.chrome || '?';
       ws.headless = !!msg.headless;
-      ws.instanceId = msg.instanceId;
+      ws.instanceId = msg.instanceId || (msg.extId ? `ext:${msg.extId}` : `conn:${ws.connId}`);
+      ws.helloed = true;
 
       // 同一个实例又连了一条：那是断线重连或重载扩展，旧的那条已经是死的，
       // 顶掉它。**只顶同实例的**——顶错了就退回单槽，每秒互踢的老毛病就回来了。
@@ -233,14 +258,11 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
         audit({ ev: 'reject_token', client: msg.client });
         return ws.close(4001, 'bad token');
       }
-      if (typeof msg.sessionId !== 'string' || !msg.sessionId) return ws.close(4000, 'sessionId required');
       agents.add(ws);
       ws.helloed = true;
       ws.client = msg.client || 'unknown';
-      // label 是宿主的显示名（「Codex CLI」），由 MCP server 从握手里认出来；
-      // client 仍是审计和 sid 用的 slug。
       ws.label = typeof msg.label === 'string' && msg.label ? msg.label.slice(0, 40) : undefined;
-      ws.sid = msg.sessionId;
+      ws.sid = msg.sessionId || `conn:${ws.connId}`;
       log(`agent 已连接：${ws.label || ws.client}（${ws.client}，会话 ${ws.sid}）`);
       const ext = primary();
       send(ws, {
@@ -368,21 +390,33 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
     console.log(`[${new Date().toLocaleTimeString('zh-CN')}] ${m}`);
   }
 
-  const ready = new Promise((resolve) => {
-    wss.on('listening', () => {
-      if (writeInfo) writeBridgeInfo({ port, token, pid: process.pid, version: VERSION, startedAt: new Date().toISOString() });
-      log(`桥已启动 ws://127.0.0.1:${port}`);
-      resolve();
-    });
-  });
+  function listenOn(p) {
+    activePort = p;
+    server.listen(p, '127.0.0.1');
+  }
 
-  wss.on('error', (e) => {
+  server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
-      log(`端口 ${port} 已被占用——大概率已有一个桥在跑`);
+      const idx = PORTS.indexOf(activePort);
+      if (autoPort && idx !== -1 && idx < PORTS.length - 1) {
+        log(`端口 ${activePort} 被占用，顺延尝试 ${PORTS[idx + 1]}...`);
+        return listenOn(PORTS[idx + 1]);
+      }
+      log(`端口 ${activePort} 已被占用——大概率已有一个桥在跑`);
       process.exit(3);
     }
     throw e;
   });
+
+  const ready = new Promise((resolve) => {
+    server.on('listening', () => {
+      if (writeInfo) writeBridgeInfo({ port: activePort, token, pid: process.pid, version: VERSION, startedAt: new Date().toISOString() });
+      log(`桥已启动 ws://127.0.0.1:${activePort}`);
+      resolve();
+    });
+  });
+
+  listenOn(port);
 
   // 被换代（版本升级）或被用户 kill 时，先把在途命令回成错误再退。
   // 不做这件事，agent 那边就是一路干等到超时——而超时默认 60s，
@@ -429,7 +463,7 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
   }, tickMs);
   idleTimer.unref();
 
-  return { wss, port, token, ready, close: () => { clearInterval(idleTimer); wss.close(); for (const c of wss.clients) c.terminate(); } };
+  return { wss, server, get port() { return activePort; }, token, ready, close: () => { clearInterval(idleTimer); server.close(); wss.close(); for (const c of wss.clients) c.terminate(); } };
 }
 
 // 审计日志里不留敏感明文：输入的文本可能是密码、验证码

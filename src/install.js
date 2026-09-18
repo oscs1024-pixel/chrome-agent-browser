@@ -109,13 +109,21 @@ const FROM_NPM = ROOT.includes(`${path.sep}node_modules${path.sep}`);
 // ~/.nvm/versions/node/v22.1.0/bin/node 这种带版本号的真实路径——node 一升级它就消失，
 // 所有 agent 同时失联，报错还只会说「命令不存在」。优先用 PATH 里的稳定入口。
 function nodeBin() {
+  const candidates = WIN
+    ? ['C:\\Program Files\\nodejs\\node.exe', 'C:\\Program Files (x86)\\nodejs\\node.exe']
+    : ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node'];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
   try {
     const out = execFileSync(WIN ? 'where' : 'which', ['node'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    const first = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
-    // 路径里带版本号的（nvm / homebrew Cellar / volta）不要，它们会随升级失效
-    if (first && fs.existsSync(first) && !/[\\/]v?\d+\.\d+\.\d+[\\/]/.test(first)) return first;
-  } catch { /* PATH 里找不到就退回真实路径，总比不能跑强 */ }
-  return process.execPath;
+    const lines = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    for (const line of lines) {
+      if (fs.existsSync(line) && !/[\\/]v?\d+\.\d+\.\d+[\\/]/.test(line)) return line;
+    }
+  } catch {}
+  // 若全为带版本号的临时目录（nvm / asdf / fnm / volta），写裸 'node' 让环境运行时动态解析，防止升级小版本后失效
+  return 'node';
 }
 
 function launcher(client) {

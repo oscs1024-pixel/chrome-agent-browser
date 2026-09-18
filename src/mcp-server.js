@@ -49,10 +49,7 @@ export const TOOLS = [
   {
     name: 'snapshot',
     description:
-      'Capture the current page as a compact list of interactive elements with refs and state ' +
-      '(value/checked/selected/expanded/disabled), plus dialogs, alerts, hover triggers, and canvas indicators. ' +
-      'Call this before any click/type. Cheap — prefer it over screenshots. Submenus marked with [hover first: ...] ' +
-      'can be revealed by hovering the trigger. Pass probeHover:true to actively discover hidden dropdown menus.',
+      'Compact interactive elements list with refs, state, dialogs, hover triggers, and canvas. Cheap — prefer over screenshots. Submenus marked with [hover first: ...] reveal on hover. Set probeHover:true to discover menus.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -79,8 +76,7 @@ export const TOOLS = [
   },
   {
     name: 'click',
-    description: 'Click ONE element by ref. Know your next step already? Use `act` instead — each extra call costs a full model turn. '
-      + 'Canvas / map / game with nothing in the snapshot? Pass captureId + imageX, imageY (measured from a screenshot) for exact coordinate clicking, or pass x,y directly; add dragTo for a drag.',
+    description: 'Click ONE element by ref. For batching use act. For canvas/map without snapshot refs, pass captureId + imageX, imageY (from screenshot) or x,y; add dragTo for drag.',
     inputSchema: {
       type: 'object',
       // 没有 button 参数：右键弹出的是浏览器原生菜单，扩展够不着，
@@ -154,20 +150,20 @@ export const TOOLS = [
   {
     name: 'key',
     description:
-      'Press a key: Escape, Enter, Tab, arrows (custom dropdowns), Backspace/Delete, or a combo. ' +
-      'Without ref it goes to whatever is focused. For entering text use type.',
+      'Press a key: Escape, Enter, Tab, arrows, Backspace/Delete, or combo ("ctrl+a"). Pass array for sequence. Without ref goes to focused element.',
     inputSchema: {
       type: 'object',
       properties: {
         key: {
           description: 'KeyboardEvent key ("Escape", "Enter", "Tab", "ArrowDown"), or with modifiers '
-            + '("ctrl+a", "shift+Tab"). Pass an array to send a sequence in one call: ["Tab","Tab","Enter"].',
+            + '("ctrl+a", "shift+Tab"). Pass an array to send a sequence: ["Tab","Tab","Enter"].',
           anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
         },
+        mods: { type: 'array', items: { type: 'string' }, description: 'Modifier keys ("ctrl", "shift", "alt", "meta").' },
         ref: { ...REF, description: 'Optional: focus this element first. Omit to send to the focused element.' },
         snapshotId: SNAP,
         tabId: TAB, real: REAL,
-        repeat: { type: 'number', description: 'Press N times (e.g. ArrowDown ×3). Max 50.' },
+        repeat: { type: 'number', description: 'Press N times. Max 50.' },
       },
       required: ['key'],
     },
@@ -185,9 +181,7 @@ export const TOOLS = [
   {
     name: 'screenshot',
     description:
-      'Screenshot the controlled tab, background tabs included. Prefer snapshot / read_text — ' +
-      'they cost far less. Returns captureId alongside image for subsequent pixel-accurate clicking. ' +
-      'Set fullPage:true for streaming full document height capture with fixed header/footer deduplication.',
+      'Screenshot the controlled tab (background tabs included). Returns captureId alongside image for pixel clicking. Set fullPage:true for full document height with fixed header/footer deduplication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -204,9 +198,7 @@ export const TOOLS = [
   {
     name: 'tabs',
     description:
-      'Manage tabs with explicit lifecycle. New tabs open in BACKGROUND and become controlled. ' +
-      'Use action:"borrow" to explicitly request borrowing a user tab with in-page confirmation. ' +
-      'When task finishes, ALWAYS call action:"return" to release borrowed tabs back to the user cleanly.',
+      'Manage tabs. New tabs open in BACKGROUND. Use action:"borrow" to request borrowing user tab with in-page confirmation. Always call action:"return" when done.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -237,10 +229,7 @@ export const TOOLS = [
   {
     name: 'network',
     description:
-      'START HERE when you need DATA rather than an action. Lists the XHR/fetch calls the page made, then returns ' +
-      'one response body via `body:"<url fragment>"`. Real field names, real numbers, paging as a parameter. ' +
-      'Add reload:true if nothing was captured yet. Never guess an endpoint name from memory — list first, ' +
-      'pick by response size. One page\'s API messy? Another page on the same site often exposes the same data cleanly.',
+      'List XHR/fetch calls the page made, then return response body via body:"<url fragment>". Add reload:true if nothing captured yet. Pick by response size.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -256,11 +245,7 @@ export const TOOLS = [
   {
     name: 'fetch',
     description:
-      'Call a URL from inside the page, carrying the user\'s cookies. Use after `network` reveals an API. ' +
-      'Paged endpoint? Pass `pages`: it walks every page in ONE call — never loop fetch by hand, each loop turn ' +
-      'costs a model round. ALWAYS check the paging object in the response, servers silently cap page size. ' +
-      '403/406 means the site signs its requests: do NOT forge them; drive the site\'s own pagination UI and ' +
-      'read via `network`. Same-origin rules apply.',
+      'Call URL from inside page carrying cookies. Use after network reveals API. Pass pages to auto-paginate in one call.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -332,11 +317,7 @@ export const TOOLS = [
   {
     name: 'query',
     description:
-      'Extract structured data by CSS selector (lists, tables), or FIND BY TEXT with `contains`: every visible ' +
-      'element whose text includes it, with a selector path and the ref it sits in — use it instead of eval to ' +
-      'check "is X on the page", read a status label, or find a dropdown option. For lists pass ' +
-      '`html:true` first to inspect markup, then `extract`: field → sub-selector, "@attr" for attributes, ' +
-      'e.g. {title:".name", link:"a@href"}.',
+      'Extract structured data by CSS selector, or find by text with contains. For lists pass html:true first to inspect structure, then extract.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -352,14 +333,7 @@ export const TOOLS = [
   {
     name: 'act',
     description:
-      'Your DEFAULT way to act — batch every step you can predict (on form wizards, nearly all). '
-      + 'Each step is effect-checked, ONE snapshot returns at the end; every call you merge saves a full '
-      + 'model turn. Stops early on no-effect / failure / submit-pay-delete controls. `read` {ref|find|selector, '
-      + 'attr?} or {contains} brings an observation back mid-batch. Blocks (one level): '
-      + '`repeat` {steps,until,max} for pagination/load-more; `if` {cond,then,else} for optional banners; '
-      + '`assert` {cond} stops unless the page matches. cond = {urlContains|selectorExists|textContains, '
-      + 'not} (OR-ed), or {ref|selector, checked|value|text} for one element. Inside repeat use find/selector, '
-      + 'never ref. Elsewhere: ref until the page re-renders, find after.',
+      'DEFAULT way to act: batch steps you can predict. Each step effect-checked, ONE snapshot returns at end. Stops on no-effect/failure/submit-pay-delete. Blocks: repeat for pagination, if for optional banners, assert to verify page state.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -407,11 +381,7 @@ export const TOOLS = [
   {
     name: 'ask',
     description:
-      'Hand control back to the user for one step, then continue. For captcha, QR login, SMS/OTP, or any '
-      + 'confirmation that should be a human decision. Brings the tab forward, shows a panel, highlights your '
-      + 'targets, sends a desktop notification, and blocks until the user acts. Use it instead of retrying '
-      + 'a step that needs a human. A "cancelled" result means the user said no: stop that task, do not '
-      + 'look for another way to do the same thing.',
+      'Hand control to user for captcha, QR login, SMS/OTP, or human decision. Shows centered HelpRequestOverlay, highlights targets, blocks until user acts. Cancelled means user declined.',
     inputSchema: {
       type: 'object',
       properties: {

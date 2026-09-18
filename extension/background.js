@@ -26,7 +26,6 @@ import { validateScript, condText, repeatMax, EXEC_BUDGET } from './script.js';
 // 桥那边永远显示「扩展没连上」。整个产品的连通性不能挂在一个单点上。
 
 let ensuring = null;
-const captureCache = new Map(); // captureId -> { captureId, tabId, scale, width, height, timestamp }
 
 let offscreenFailed = null;   // 记下原因，doctor 和 popup 要能说清为什么走了兜底
 
@@ -200,42 +199,54 @@ async function directConnect() {
     // 两条腿必须报同一个 instanceId：桥认的是实例不是连接，报岔了
     // 就会被当成两个 Chrome 并存，谁也不替换谁。
     const iid = await instanceId();
-    for (const port of PORTS) {
+    const probePort = (port) => new Promise((resolve, reject) => {
+      const sock = new WebSocket(`ws://127.0.0.1:${port}`);
+      const t = setTimeout(() => { try { sock.close(); } catch {} reject(new Error('timeout')); }, 1200);
+      sock.onopen = () => sock.send(JSON.stringify({
+        type: 'hello', role: 'extension', extId: chrome.runtime.id,
+        version: chrome.runtime.getManifest().version,
+        instanceId: iid, headless: isHeadless(),
+        chrome: (navigator.userAgent.match(/Chrome\/([\d.]+)/) || [])[1], v: 1,
+      }));
+      sock.onmessage = (ev) => {
+        let m;
+        try { m = JSON.parse(ev.data); } catch { try { sock.close(); } catch {} return reject(new Error('json')); }
+        if (m.type !== 'welcome') { clearTimeout(t); try { sock.close(); } catch {} return reject(new Error('rejected')); }
+        clearTimeout(t);
+        resolve({ sock, m });
+      };
+      sock.onerror = () => { clearTimeout(t); reject(new Error('error')); };
+      sock.onclose = () => { clearTimeout(t); reject(new Error('closed')); };
+    });
+
+    let hit = null;
+    try {
+      hit = await probePort(PORTS[0]);
+    } catch {
       try {
-        directWs = await new Promise((resolve, reject) => {
-          const sock = new WebSocket(`ws://127.0.0.1:${port}`);
-          const t = setTimeout(() => { sock.close(); reject(new Error('timeout')); }, 1500);
-          sock.onopen = () => sock.send(JSON.stringify({
-            type: 'hello', role: 'extension', extId: chrome.runtime.id,
-            version: chrome.runtime.getManifest().version,
-            instanceId: iid, headless: isHeadless(),
-            chrome: (navigator.userAgent.match(/Chrome\/([\d.]+)/) || [])[1], v: 1,
-          }));
-          sock.onmessage = (ev) => {
-            const m = JSON.parse(ev.data);
-            if (m.type !== 'welcome') { clearTimeout(t); sock.close(); return reject(new Error('rejected')); }
-            clearTimeout(t);
-            directLastRx = Date.now();
-            directBridgeVersion = String(m.bridge || '');
-            sock.onmessage = (e) => {
-              directLastRx = Date.now();
-              const x = JSON.parse(e.data);
-              if (x.type === 'pong') return;
-              if (x.type === 'ping') { if (sock.readyState === 1) sock.send(JSON.stringify({ type: 'pong' })); return; }
-              onMessage(x);
-            };
-            sock.onclose = () => { directWs = null; stopDirectPing(); setBadge(false); };
-            sock.onerror = () => {};
-            resolve(sock);
-          };
-          sock.onerror = () => { clearTimeout(t); reject(new Error('error')); };
-        });
-        startDirectPing();
-        setBadge(true);
-        noteBridgeVersion(directBridgeVersion);
-        void flushOutbox(async (m) => { if (directWs?.readyState === 1) directWs.send(JSON.stringify(m)); });
-        return;
-      } catch { /* 换下一个端口 */ }
+        hit = await Promise.any(PORTS.slice(1).map(probePort));
+      } catch {}
+    }
+
+    if (hit) {
+      const { sock, m } = hit;
+      directWs = sock;
+      directLastRx = Date.now();
+      directBridgeVersion = String(m.bridge || '');
+      sock.onmessage = (e) => {
+        directLastRx = Date.now();
+        const x = JSON.parse(e.data);
+        if (x.type === 'pong') return;
+        if (x.type === 'ping') { if (sock.readyState === 1) sock.send(JSON.stringify({ type: 'pong' })); return; }
+        onMessage(x);
+      };
+      sock.onclose = () => { directWs = null; stopDirectPing(); setBadge(false); };
+      sock.onerror = () => {};
+      startDirectPing();
+      setBadge(true);
+      noteBridgeVersion(directBridgeVersion);
+      void flushOutbox(async (msg) => { if (directWs?.readyState === 1) directWs.send(JSON.stringify(msg)); });
+      return;
     }
     setBadge(false);
   } finally {
@@ -1542,9 +1553,17 @@ async function performCore(id, cmd, p, { blockSensitive = false } = {}, ctx) {
   // 顺带把效果基线采回来。没有 ref 的操作（fill、无 ref 的 key）只采基线。
   const hasTarget = !!(params.ref || params.selector || params.find);
 
-  if (cmd === 'click' && params.captureId && Number.isFinite(params.imageX) && Number.isFinite(params.imageY)) {
-    const cap = captureCache.get(params.captureId);
-    const scale = cap?.scale || 1;
+  if (cmd === 'click' && params.captureId) {
+    if (!Number.isFinite(params.imageX) || !Number.isFinite(params.imageY)) {
+      throw err('INVALID_PARAMS', '使用 captureId 点击时必须提供有效的 imageX 与 imageY 数字坐标');
+    }
+    const capKey = `cap_${params.captureId}`;
+    const stored = await chrome.storage.session.get(capKey).catch(() => ({}));
+    const cap = stored[capKey];
+    if (!cap) {
+      throw err('CAPTURE_EXPIRED', `截图 ${params.captureId} 已过期或不存在。SW 回收或会话超时后需重新调用 screenshot 截图后再点击。`);
+    }
+    const scale = cap.scale || 1;
     params.x = Math.round(params.imageX / scale);
     params.y = Math.round(params.imageY / scale);
   }
@@ -2345,19 +2364,17 @@ const HANDLERS = {
       if (veiled) void veilMarks(id, false);
     }
     const captureId = 'cap_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-    captureCache.set(captureId, {
-      captureId,
-      tabId: id,
-      scale: res.scale || 1,
-      width: res.width,
-      height: res.height,
-      fullPage: !!p.fullPage,
-      timestamp: Date.now(),
-    });
-    const now = Date.now();
-    for (const [k, v] of captureCache) {
-      if (now - v.timestamp > 15 * 60 * 1000) captureCache.delete(k);
-    }
+    await chrome.storage.session.set({
+      [`cap_${captureId}`]: {
+        captureId,
+        tabId: id,
+        scale: res.scale || 1,
+        width: res.width,
+        height: res.height,
+        fullPage: !!p.fullPage,
+        timestamp: Date.now(),
+      },
+    }).catch(() => {});
     return { ...res, captureId };
   },
 
@@ -2586,7 +2603,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 截图幕帘的开合。判据和 postMark 一样认回执——sendMessage 对没有监听者的
 // 页面 resolve(undefined) 而不是 reject，「没报错」不等于「藏好了」。
 const veilMarks = (tabId, on) =>
-  chrome.tabs.sendMessage(tabId, { __abMark: 'stealth', on }).then((r) => !!r?.ok).catch(() => false);
+  chrome.tabs.sendMessage(tabId, { __abMark: 'stealth', __hcMark: 'stealth', on }).then((r) => !!r?.ok).catch(() => false);
 
 // ---------- 生命周期 ----------
 
@@ -2743,11 +2760,16 @@ chrome.runtime.onMessage.addListener((m, _s, sendResponse) => {
         const rows = [];
         for (const sid of lives) {
           const tabId = all[agentTabKey(sid)];
+          let tabExists = false;
           let title = '';
-          // 标题里的 emoji 前缀是我们自己加的，这一行左边已经有色点了，
-          // 再带一次只是噪音
-          if (tabId) title = await chrome.tabs.get(tabId).then((t) => t.title || t.url || '').catch(() => '');
-          rows.push({ ...identityOf(sid, clients[sidClientKey(sid)]), tabId: title ? tabId : null, title });
+          if (tabId) {
+            const tabObj = await chrome.tabs.get(tabId).catch(() => null);
+            if (tabObj) {
+              tabExists = true;
+              title = tabObj.title || tabObj.url || '(无标题)';
+            }
+          }
+          rows.push({ ...identityOf(sid, clients[sidClientKey(sid)]), tabId: tabExists ? tabId : null, title });
         }
         sendResponse({ sessions: rows, enabled: await markEnabled() });
       } catch {

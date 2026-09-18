@@ -5,49 +5,77 @@
 //
 // 只往 window.__abNet 里堆记录，不上报、不外发。读取由扩展按需拉。
 (() => {
-  if (window.__abNet) return;
-  window.__abNet = [];
+  try {
+    Object.defineProperty(window, '__abNet', {
+      value: [],
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  } catch {
+    window.__abNet = [];
+  }
 
   const MAX_ENTRIES = 300;
   const MAX_BODY = 400000;
 
   const push = (r) => {
-    window.__abNet.push(r);
-    if (window.__abNet.length > MAX_ENTRIES) window.__abNet.shift();
+    const arr = window.__abNet;
+    if (!Array.isArray(arr)) return;
+    arr.push(r);
+    if (arr.length > MAX_ENTRIES) arr.shift();
+  };
+
+  // 防反爬探测：覆盖 toString 伪装成原生函数 [native code]
+  const nativeMap = new WeakMap();
+  const origToString = Function.prototype.toString;
+  try {
+    Function.prototype.toString = function () {
+      if (nativeMap.has(this)) return nativeMap.get(this);
+      return origToString.call(this);
+    };
+    nativeMap.set(Function.prototype.toString, 'function toString() { [native code] }');
+  } catch {}
+
+  const protect = (fn, name) => {
+    try { nativeMap.set(fn, `function ${name}() { [native code] }`); } catch {}
+    return fn;
   };
 
   const origFetch = window.fetch;
   if (origFetch) {
-    window.fetch = async function (...a) {
+    const wrappedFetch = async function (...a) {
       const res = await origFetch.apply(this, a);
-      // 网络审计走非阻塞旁路，绝不 await 阻塞页面自身对 Response 的流式消费
       (async () => {
         try {
           const url = typeof a[0] === 'string' ? a[0] : (a[0]?.url || String(a[0] || ''));
           const method = a[1]?.method || a[0]?.method || 'GET';
           const ct = res.headers.get('content-type') || '';
-          // 显式跳过流式 SSE 长连接，这类连接的 clone().text() 会一直挂起直到流结束
           if (ct.includes('event-stream')) {
             push({ t: Date.now(), method, url, status: res.status, ct, body: '<stream>' });
             return;
           }
           const body = /json|text|javascript/.test(ct) ? (await res.clone().text()).slice(0, MAX_BODY) : '';
           push({ t: Date.now(), method, url, status: res.status, ct, body });
-        } catch { /* 记录失败绝不能影响页面本身 */ }
+        } catch {}
       })();
       return res;
     };
+    window.fetch = protect(wrappedFetch, 'fetch');
   }
 
+  const xhrMeta = new WeakMap();
   const oOpen = XMLHttpRequest.prototype.open;
   const oSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (m, u, ...rest) {
-    this.__ab = { method: m, url: String(u) };
+  XMLHttpRequest.prototype.open = protect(function (m, u, ...rest) {
+    xhrMeta.set(this, { method: m, url: String(u) });
     return oOpen.call(this, m, u, ...rest);
-  };
-  XMLHttpRequest.prototype.send = function (...a) {
+  }, 'open');
+  XMLHttpRequest.prototype.send = protect(function (...a) {
     this.addEventListener('load', () => {
       try {
+        const meta = xhrMeta.get(this);
+        if (!meta) return;
         let body = '';
         const rt = this.responseType;
         if (!rt || rt === 'text') {
@@ -57,7 +85,7 @@
         }
         push({
           t: Date.now(),
-          ...this.__ab,
+          ...meta,
           status: this.status,
           ct: this.getResponseHeader('content-type') || '',
           body: body.slice(0, MAX_BODY),
@@ -65,5 +93,5 @@
       } catch {}
     });
     return oSend.apply(this, a);
-  };
+  }, 'send');
 })();

@@ -1020,6 +1020,7 @@
     // **必须在下面的 elementFromPoint 之前调**——坐标落在驾驶舱底下时它要
     // 先让路（pointer-events:none 同步生效），否则遮挡检测会把我们自己的
     // 面板当成遮挡物，L2 的真实点击更会直接点进面板里。
+    window.__hcCursor?.(x, y, ({ click: 'click', type: 'type', select: 'type', key: 'key' })[p.forCmd] || 'aim');
     window.__abCursor?.(x, y, ({ click: 'click', type: 'type', select: 'type', key: 'key' })[p.forCmd] || 'aim');
 
     // 遮挡检测和 doClick 保持同一套判断——L2 打的是坐标，遮挡时点中的是遮挡物，

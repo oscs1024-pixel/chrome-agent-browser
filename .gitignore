@@ -14,9 +14,6 @@ dist/
 credentials.json
 audit.jsonl
 
-# 测试用例与测试相关数据（敏感数据与测试脚本不入库）
-test/
-*.test.js
 
 # 本机私人数据，不进仓库
 小红书数据分析-*.md

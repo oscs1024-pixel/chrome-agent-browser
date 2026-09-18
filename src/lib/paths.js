@@ -57,7 +57,7 @@ export function moveFile(from, to) {
   }
 }
 
-// 审计日志：每条命令一行，出事能查。桥是唯一写入方。
+// 审计日志：每条命令一行，出事能查。桥与 MCP 服务写入。
 const AUDIT_MAX_BYTES = 10 * 1024 * 1024; // 10MB 自动滚动
 
 export function audit(entry) {

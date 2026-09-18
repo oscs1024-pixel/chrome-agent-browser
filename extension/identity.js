@@ -46,6 +46,16 @@ export const MARK_PALETTE = [
   { emoji: '🟫', color: '#92400e', group: 'grey', shape: 'square' },
 ];
 
+// 标签栏标题前缀的尾哨兵，U+2009 窄空格。
+export const MARK_SENTINEL = '\u2009';
+
+// 认前缀只认哨兵，不认 emoji 列表
+export function stripMarkPrefix(title) {
+  const s = String(title || '');
+  const i = s.indexOf(MARK_SENTINEL);
+  return i >= 0 && i <= 12 ? s.slice(i + 1) : s;
+}
+
 // FNV-1a。选它不是因为快，是因为它短到可以原样抄进任何一侧，
 // 且在不同 JS 引擎上结果一模一样——外观必须在扩展、桥、测试里算出同一个值。
 function hash32(s) {
