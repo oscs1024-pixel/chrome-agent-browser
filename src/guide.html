@@ -610,6 +610,38 @@ details[open] summary::after {
   box-shadow: var(--shadow-sm);
 }
 
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #090d16;
+    --surface: #111827;
+    --surface-subtle: #182234;
+    --surface-card: #131c2e;
+    --border: #1f293d;
+    --border-subtle: #172033;
+    --border-active: #38bdf8;
+    --text-main: #f8fafc;
+    --text-body: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-light: #64748b;
+    --primary: #38bdf8;
+    --primary-hover: #60a5fa;
+    --primary-light: rgba(56, 189, 248, 0.12);
+    --accent: #38bdf8;
+    --success: #34d399;
+    --success-bg: rgba(52, 211, 153, 0.12);
+    --amber: #fbbf24;
+    --amber-bg: rgba(251, 191, 36, 0.12);
+  }
+  body {
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% 0%, rgba(56, 189, 248, 0.08), transparent),
+      radial-gradient(circle at 100% 100%, rgba(14, 165, 233, 0.05), transparent);
+  }
+  .manifest-card, .step-card, .matrix-card, .visual-proof {
+    box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.4) !important;
+  }
+}
 @media (max-width: 960px) {
   .hero { grid-template-columns: 1fr; }
   .steps-grid { grid-template-columns: 1fr; }
@@ -842,7 +874,28 @@ details[open] summary::after {
           <div class="feature-badge">4</div>
           <div class="feature-text">
             <b>截图幕帘保护 (Stealth Mode)</b>
-            <p>Agent 在截屏时，页面自动在瞬间隐去边框与驾驶舱，确保大模型获取真实洁净视图，绝不产生视觉幻觉。</p>
+            <p>Agent 截屏时瞬间隐去边框与驾驶舱，确保大模型获取真实洁净视图，绝不产生视觉幻觉。</p>
+          </div>
+        </li>
+        <li>
+          <div class="feature-badge">5</div>
+          <div class="feature-text">
+            <b>置顶毛玻璃协助浮层 (HelpRequestOverlay)</b>
+            <p>触发验证码、2FA 或风控时，顶部居中弹出半透明高亮浮层，不阻挡底层滑块或操作，人工处理完一键继续。</p>
+          </div>
+        </li>
+        <li>
+          <div class="feature-badge">6</div>
+          <div class="feature-text">
+            <b>显式标签借用与归还 (Tab Borrow & Return)</b>
+            <p>介入现有用户页面前弹出确认条，任务结束安全归还，赋予用户最高安全感与控制权。</p>
+          </div>
+        </li>
+        <li>
+          <div class="feature-badge">7</div>
+          <div class="feature-text">
+            <b>全页面长截图与浮层防重叠</b>
+            <p>支持 <code>fullPage: true</code> 滚动抓取完整长页面，自动抑制 fixed 顶底栏重复叠加穿帮，防 OOM 溢出。</p>
           </div>
         </li>
       </ul>
@@ -895,29 +948,29 @@ details[open] summary::after {
     <div class="matrix-card">
       <h4>🔍 结构感知层</h4>
       <ul>
-        <li><code>snapshot</code> DOM结构快照与ref编号</li>
-        <li><code>read_text</code> 提取指定容器渲染文本</li>
-        <li><code>query</code> CSS / XPath 节点查询</li>
-        <li><code>status</code> 查看当前受控标签状态</li>
+        <li><code>snapshot</code> DOM 结构快照、hover 探测与 canvas 标记</li>
+        <li><code>read_text</code> 提取指定容器渲染文本 (防高熵噪声)</li>
+        <li><code>query</code> CSS / XPath 节点提取与结构化解析</li>
+        <li><code>status</code> 驾驶舱即时意图声明广播</li>
       </ul>
     </div>
     <div class="matrix-card">
       <h4>⚡️ 物理交互层</h4>
       <ul>
-        <li><code>click</code> 元素点击 (L1/L2自适应)</li>
-        <li><code>type</code> 键盘输入 (支持富文本)</li>
+        <li><code>click</code> 元素点击 (含 captureId 图像像素精准点击)</li>
+        <li><code>type</code> 键盘输入 (支持富文本与 Enter 提交)</li>
         <li><code>fill</code> 批量多表单极速原子填写</li>
-        <li><code>select</code> 下拉框原生选项选择</li>
-        <li><code>key</code> 发送物理按键与组合键</li>
-        <li><code>scroll</code> 页面整体或内部容器滚动</li>
+        <li><code>select</code> 下拉框原生选项匹配</li>
+        <li><code>key</code> 物理按键与组合键派发 (支持 mods)</li>
+        <li><code>scroll</code> 页面整体或内部滚动容器平滑滚动</li>
       </ul>
     </div>
     <div class="matrix-card">
       <h4>🌐 会话与数据层</h4>
       <ul>
-        <li><code>tabs</code> 多标签页调度管理</li>
+        <li><code>tabs</code> 多标签页管理 (支持 borrow/return 借用归还)</li>
         <li><code>navigate</code> 网页跳转/前进/后退/刷新</li>
-        <li><code>screenshot</code> 后台标签页原生截屏</li>
+        <li><code>screenshot</code> 视口/全页面长截图与 captureId 追踪</li>
         <li><code>network</code> 捕获网络请求与响应体</li>
         <li><code>fetch</code> 带Cookie页面上下文请求</li>
         <li><code>download</code> 浏览器原生下载通道</li>
@@ -927,7 +980,7 @@ details[open] summary::after {
     <div class="matrix-card">
       <h4>🛡 安全与协同层</h4>
       <ul>
-        <li><code>ask</code> 人机协同验证码/支付挂起</li>
+        <li><code>ask</code> 置顶居中 HelpRequestOverlay 人工交接</li>
         <li><code>eval</code> 页面执行JS (绕过CSP)</li>
         <li><code>act</code> 复合循环条件剧本执行</li>
         <li><code>learnings</code> 21大站避坑经验沉淀</li>

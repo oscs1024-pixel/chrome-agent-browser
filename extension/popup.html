@@ -6,8 +6,9 @@
 <style>
   :root {
     color-scheme: light;
-    --canvas: #f6f8fb;
+    --canvas: #f8fafc;
     --surface: #ffffff;
+    --surface-elevated: #ffffff;
     --ink: #0f172a;
     --muted: #64748b;
     --quiet: #94a3b8;
@@ -16,8 +17,8 @@
     --blue-soft: #eff6ff;
     --green: #059669;
     --green-soft: #ecfdf5;
-    --navy: #0f172a;
-    --navy-card: #1e293b;
+    --navy: #0b1329;
+    --navy-card: #15203b;
     --amber: #d97706;
     --amber-soft: #fffbeb;
   }
@@ -99,16 +100,17 @@
   .connection {
     position: relative;
     display: grid;
-    grid-template-columns: 34px minmax(0, 1fr) auto;
-    gap: 10px;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: 11px;
     align-items: center;
-    min-height: 78px;
-    padding: 13px 14px;
+    min-height: 80px;
+    padding: 14px 15px;
     overflow: hidden;
     color: #f8fafc;
-    background: var(--navy);
-    border-radius: 12px;
-    box-shadow: 0 10px 24px rgba(15, 23, 42, .14);
+    background: linear-gradient(145deg, #0b1329 0%, #15203b 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 13px;
+    box-shadow: 0 12px 28px rgba(11, 19, 41, 0.22);
   }
 
   .conn-icon {
@@ -331,19 +333,22 @@
   @media (prefers-color-scheme: dark) {
     :root {
       color-scheme: dark;
-      --canvas: #0b111e;
-      --surface: #141f32;
+      --canvas: #090e1a;
+      --surface: #111a2e;
+      --surface-elevated: #16223c;
       --ink: #f8fafc;
       --muted: #94a3b8;
       --quiet: #64748b;
-      --line: #222f46;
-      --blue-soft: #162646;
-      --green-soft: #123028;
-      --navy: #090e18;
-      --navy-card: #141f32;
+      --line: #1c2b48;
+      --blue-soft: rgba(37, 99, 235, 0.16);
+      --green-soft: rgba(5, 150, 105, 0.16);
+      --navy: #070b14;
+      --navy-card: #111a2e;
     }
-    .panel { box-shadow: 0 4px 14px rgba(0,0,0,.2); }
-    code, .sess .code { color: #cbd5e1; background: #1e2c44; }
+    .panel { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+    code, .sess .code { color: #93c5fd; background: #162442; }
+    .brand { border-bottom-color: var(--line); }
+    .tab-status { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); }
   }
 </style>
 </head>

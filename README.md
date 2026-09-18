@@ -31,9 +31,11 @@
 - [七、23 个核心工具详解](#七23-个核心工具详解)
 - [八、L1 / L2 自适应执行机制](#八l1--l2-自适应执行机制)
 - [九、多 Agent 会话隔离与视觉幕帘](#九多-agent-会话隔离与视觉幕帘)
-- [十、常用 CLI 命令速查](#十常用-cli-命令速查)
-- [十一、常见排错与诊断](#十一常见排错与诊断)
-- [十二、开源合规声明](#十二开源合规声明)
+- [十、四大进阶交互能力](#十四大进阶交互能力)
+- [十一、安全加固与生产级守护](#十一安全加固与生产级守护)
+- [十二、常用 CLI 命令速查](#十二常用-cli-命令速查)
+- [十三、常见排错与诊断](#十三常见排错与诊断)
+- [十四、开源合规声明](#十四开源合规声明)
 
 ---
 
@@ -213,16 +215,16 @@ Pi Agent 会调用 `agent_browser(action="tabs", params={action:"new", url:"http
 
 | 工具名称 | 关键入参 | 功能描述 |
 |---|---|---|
-| `snapshot` | `tabId` | 捕获当前页面的可交互元素结构化快照，提取 ARIA 状态，分配稳定标号（`e1`, `e2`...） |
-| `click` | `ref`, `selector`, `find`, `expect`, `real`, `x`, `y`, `dragTo` | 点击元素。默认 L1 合成派发，无效果或特殊控件自动升级 L2 原生物理点击，支持坐标与拖拽 |
+| `snapshot` | `tabId`, `probeHover: boolean` | 捕获页面可交互元素树与稳定 refs。支持自动识别折叠菜单打标 `[hover first: ...]`；传 `probeHover:true` 主动试探并捕获隐藏子菜单项；识别并标记 `canvas (visual:screenshot)` |
+| `click` | `ref`, `selector`, `find`, `expect`, `real`, `x`, `y`, `captureId`, `imageX`, `imageY`, `dragTo` | 元素点击 (L1/L2自适应)。针对 Canvas/地图/图表等无 DOM 节点区域，支持传入 `captureId` + 图像像素坐标 `imageX, imageY` 按真实 scale 换算执行精准物理点击 |
 | `type` | `ref`, `text`, `clear`, `submit`, `find`, `selector`, `expect`, `real` | 文本录入，支持输入后按 Enter 提交、清空已有内容，兼容 Monaco/CodeMirror 富文本 |
 | `select` | `ref`, `value`, `find`, `expect` | 原生 `<select>` 选项匹配（按 label 或 value），保持在 DOM 级派发规避原生弹窗阻塞 |
 | `fill` | `fields: [{ ref, text, value, check, clear }]`, `submit`, `submitRef`, `snapshotId` | 批量整表填充并可选触发提交，任意字段失败时中止提交 |
-| `key` | `key`（单键/组合键/序列数组）, `ref`, `repeat`, `real` | 派发键盘事件（如 `Escape`, `Enter`, `Tab`, `ArrowDown`），自动补齐浏览器原生默认行为 |
+| `key` | `key`（单键/组合键/序列数组）, `mods: ["ctrl","shift","alt","meta"]`, `ref`, `repeat`, `real` | 派发物理按键与组合键（支持 `mods` 显式修饰键），自动补齐浏览器原生默认行为 |
 | `read_text` | `tabId`, `format: "markdown" \| "text"` | 提取主正文内容，已过滤脚本/样式噪声与 4 类 CSS 隐藏文本，自动屏蔽成组高熵恢复码 |
 | `navigate` | `url`, `action: "back" \| "forward" \| "reload"`, `tabId` | 页面跳转与历史导航，严格等待导航提交与 DOM 就绪并返回新页面快照 |
-| `tabs` | `action: "list" \| "new" \| "select" \| "close"`, `url`, `label`, `focus`, `tabId` | 标签页管理。默认后台静默开页，支持会话独立彩虹槽与标签组归属 |
-| `screenshot` | `tabId`, `savePath`, `full: boolean`, `focus` | 页面截屏。通过 CDP 支持直接截取后台非激活标签页；拍摄瞬间自动拉下视觉幕帘 |
+| `tabs` | `action: "list" \| "new" \| "select" \| "close" \| "borrow" \| "return"`, `url`, `label`, `reason`, `focus`, `tabId` | 标签页全生命周期管理。支持后台静默开页；使用 `borrow` 申请显式借用已有标签页并弹窗确认，任务结束调用 `return` 干净归还并解除控制 |
+| `screenshot` | `tabId`, `savePath`, `full: boolean`, `fullPage: boolean`, `maxHeight: number`, `hideFixed: boolean`, `focus` | 页面截屏，返回 `captureId`。支持后台截屏与视觉幕帘；设置 `fullPage:true` 开启全页面流式长截图，自动去重抑制 fixed/sticky 悬浮栏，带高度上限防 OOM |
 | `wait` | `for: "selector" \| "text" \| "idle"`, `value`, `timeout`, `tabId` | 条件等待：等待选择器出现、文本呈现或网络空闲 |
 | `scroll` | `to: "bottom" \| "top"`, `times`, `wait`, `ref`, `tabId` | 页面或指定内部容器懒加载平滑滚动，高度停止增长时自愈早停 |
 | `network` | `match`, `body`, `index`, `reload`, `maxBody`, `tabId` | 检查页面 XHR / Fetch 请求目录，或按 URL 片段提取指定响应体 |
@@ -231,7 +233,7 @@ Pi Agent 会调用 `agent_browser(action="tabs", params={action:"new", url:"http
 | `upload` | `path`, `selector`, `dropSelector`, `tabId` | 本地文件上传：优先走 CDP 直接注入本地路径（零内存拷贝）；不支持时降级至拖拽 Base64 |
 | `query` | `selector`, `contains`, `extract`, `html`, `limit`, `tabId` | 结构化数据提取或按可见文本查找元素选择器路径 |
 | `act` | `steps: [...]`, `allowSensitive`, `snapshotId`, `tabId` | 批处理剧本执行器：支持单次往返执行多步、循环（`repeat`）、条件判断（`if`）与断言（`assert`） |
-| `ask` | `prompt`, `title`, `targets`, `until`, `timeout`, `focus` | 人工介入通道：遇验证码、人脸或扫码时唤起顶层浮条与桌面通知，支持自动完成条件探活 |
+| `ask` | `prompt`, `title`, `targets`, `until`, `timeout`, `focus` | 规范化 Human-in-the-Loop 交互：在受控页面顶部中央弹出半透明高保真 `HelpRequestOverlay` 浮层与桌面通知，不阻塞底层页面操作，用户处理完毕后点击继续 |
 | `status` | `text`（≤80字） | 向页面右下角驾驶舱广播即时意图声明，零开销单向同步 |
 | `eval` | `expr`, `maxLength`, `tabId` | 页面 MAIN world 执行 JS；求值期间强制安装支付点击拦截闸门，遇严格 CSP 升级 CDP 执行 |
 | `learnings` | `domain`, `save` | 纯本地读取或保存针对站点的操作经验与避坑剧本 |
@@ -273,9 +275,44 @@ Pi Agent 会调用 `agent_browser(action="tabs", params={action:"new", url:"http
 - **独立彩虹槽位**：每个 Agent 进程根据其 `sessionId` 哈希分配专属于它的颜色（14 色轮换）与 Chrome 标签组，受控页面会自动加上彩色边框与右下角状态胶囊；
 - **截图幕帘（Stealth Mode）**：当 Agent 发起 `screenshot` 截屏请求时，扩展会在捕获瞬间将所有自身绘制的边框、高亮框与驾驶舱完全隐藏，截取最真实的原始网页，截取完毕立即恢复，彻底杜绝模型把自身标记当成网页内容产生幻觉。
 
+
 ---
 
-## 十、常用 CLI 命令与构建流水速查
+## 十、四大进阶交互能力
+
+### 1. 工业级全页面长截图与浮层防穿帮
+传统长截图滚动拼接时，页面固定的 `position: fixed` / `sticky` 导航条与悬浮底栏会在每屏截图中反复重印造成穿帮，且大尺寸 Canvas 极易触发浏览器像素上限造成崩溃。
+`chrome-agent-browser` 引入了**浮层抑制与流式长截取**：
+- 传 `fullPage: true` 时，自动测量文档完整尺寸，并动态设置 `maxHeight`（默认 16384px，防瀑布流 OOM）；
+- 捕获期间自动调度内容脚本临时抑制悬浮条（首尾帧保留、中间帧去重），拍完毫秒级恢复；
+- 截取成功后签发唯一的 `captureId`，并在 `storage.session` 中持久化记录缩放与视口基线。
+
+### 2. 显式标签页借用与归还生命周期 (`tab borrow / return`)
+为了彻底解决“Agent 在未经允许的情况下突然接管用户正在浏览的私人标签页”的突兀感：
+- **申请借用 (`action: "borrow"`)**：Agent 需显式提供 `tabId` 与借用理由 `reason`，系统在目标页面顶部中央唤起高保真 `BorrowConfirmationOverlay` 授权浮层，用户点击【同意借用】后才正式纳入控制槽并记录原始位置；
+- **任务归还 (`action: "return"`)**：任务完成后调用 `return`，扩展自动解除控制、恢复标签组并弹出轻量 Toast 提醒用户标签页已归还。
+
+### 3. 复杂交互场景增强（Hover 预探测 + Canvas 图像坐标点击）
+- **Hover 自动识别与预探测**：快照引擎自动识别带下拉菜单、`aria-haspopup` 的折叠触发器并标注 `(hover first)`；传入 `probeHover: true` 时，内容脚本会在后台毫秒级预检隐藏子菜单并提取展开项（如 `[hover first: Mac | iPad | iPhone]`），彻底解决大模型在折叠菜单前翻车的问题；
+- **Canvas 图像像素级物理点击**：快照引擎自动识别 `<canvas>` 节点并打标 `(visual:screenshot)`。截屏后大模型可直接根据图片测出的实际像素坐标调用 `click(captureId, imageX, imageY)`，底层依据截图比例尺与设备像素比自动换算并在该点触发真实物理点击。
+
+### 4. 规范化页内 Human-in-the-Loop 浮层 (`HelpRequestOverlay`)
+当遇到滑块验证码、扫码登录、人脸核验或风控阻断时，调用 `ask` 工具：
+- 受控页面顶部中央绝对居中弹出发光毛玻璃悬浮条（`HelpRequestOverlay`），带有倒计时、清晰步骤提示与操作指引；
+- 针对支付/敏感动作自动切换危险红警示主题（`🚨 敏感操作/支付确认`）；
+- **非阻塞交互**：浮层采用穿透式设计，底层网页的滑块、输入框、二维码 100% 保持正常可点击/可滑动，用户完成后点击【我已完成】即可无缝交接恢复。
+
+---
+
+## 十一、安全加固与生产级守护
+
+1. **扩展白名单鉴权 (`KNOWN_EXTENSION_IDS`)**：桥服务端在 `verifyClient` 与 `hello` 阶段严格校验 Origin，仅放行本地固定 Key 派生 ID（`ljnomddomgifjdddbefdjmgekhdiijnn`）以及 Chrome Web Store 正式上架 ID，彻底防御恶意扩展渗透控制流；
+2. **端口顺延自愈**：桥服务支持 `8899 -> 8900 -> 8901 -> 8902 -> 8903` 范围内的端口冲突自愈顺延，并与扩展的双腿并发竞速探测机制完美契合；
+3. **多 Chrome 实例隔离**：全局受控槽与标签组按实例 ID（`activeTabId_${iid}`）实现实例级本地隔离，防止 headless 自动化实例与日常工作主浏览器发生标签踩踏；
+4. **反爬与隐匿性加固**：`net-hook.js` 的 `__abNet` 采用不可枚举属性保护，所有挂钩函数（`fetch`, `open`, `send`）的 `.toString()` 均伪装为原生 `[native code]`，无惧反爬检测。
+---
+
+## 十二、常用 CLI 命令与构建流水速查
 
 ```bash
 # 打开图形化安装说明书
@@ -319,7 +356,7 @@ npm run pack
 
 ---
 
-## 十一、常见排错与诊断
+## 十三、常见排错与诊断
 
 1. **运行 `doctor` 提示“Chrome 扩展这会儿没连着桥”**：
    - 检查 Chrome 是否已启动；
@@ -334,6 +371,6 @@ npm run pack
 
 ---
 
-## 十二、开源合规声明
+## 十四、开源合规声明
 
 本项目采用 MIT License 开源，详见 [LICENSE](LICENSE)。
