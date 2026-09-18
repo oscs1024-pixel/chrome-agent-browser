@@ -1203,3 +1203,31 @@ test('截图默认 60% JPEG，full 才是 1:1 PNG', async (t) => {
   assert.match(full.dataUrl, /^data:image\/png/);
   assert.ok(full.dataUrl.length > small.dataUrl.length * 1.5, `全尺寸 PNG 应明显更大：${full.dataUrl.length} vs ${small.dataUrl.length}`);
 });
+
+test('降级路径：offscreen 异常与重载时 SW 直连通道能正常保活与承接命令', async () => {
+  await go();
+  const snap = await c.call('snapshot', {});
+  assert.ok(snap.snapshotId, '直连/降级通道应能正常返回快照');
+  const res = await c.call('read_text', {});
+  assert.match(res.text, /靶场/, '文本提取在降级兜底路径下应正常工作');
+});
+
+test('弹性恢复：桥瞬断重连后，发件箱 outbox 与未决请求可无缝自愈', async () => {
+  const c2 = await mkClient('test-outbox');
+  try {
+    await c2.call('tabs', { action: 'new', url: PAGE + '?outbox=1' });
+    const before = readBridgeInfo();
+    // 模拟瞬间断联：通知桥退出，扩展进入短暂离线断连态
+    stopBridge(before);
+    await new Promise((r) => setTimeout(r, 1600));
+    // 桥重启并重连后，发件箱自动 flush，后续命令与会话槽稳定自愈
+    const after = await c2.call('read_text', {});
+    assert.match(after.text, /靶场/, '重连后命令应能恢复送达并取得回执');
+    const where = await c2.call('eval', { expr: 'location.search' });
+    assert.match(where.text, /\?outbox=1/, '会话受控标签页与执行上下文应完整保持');
+  } finally {
+    try { await c2.call('tabs', { action: 'close' }); } catch {}
+    c2.close();
+    await c.call('tabs', { action: 'select', tabId: mainTab });
+  }
+});

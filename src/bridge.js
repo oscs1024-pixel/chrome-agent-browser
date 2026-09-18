@@ -209,6 +209,10 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
     ws.on('error', () => {});
   });
 
+  /**
+   * @param {any} ws
+   * @param {import('./lib/types.js').BridgeHello} msg
+   */
   function handleHello(ws, msg) {
     if (msg.type !== 'hello') return ws.close(4000, 'expected hello');
     if (msg.v !== PROTOCOL) return ws.close(4010, 'protocol mismatch');
@@ -396,9 +400,17 @@ export function startBridge({ port = DEFAULT_PORT, token = newToken(), writeInfo
     if (msg.type === 'event' && extensions.has(ws)) broadcast(msg);
   }
 
+  /**
+   * @param {any} ws
+   * @param {import('./lib/types.js').BridgeCmd | import('./lib/types.js').BridgeRes | Record<string, unknown>} obj
+   */
   function send(ws, obj) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
   }
+
+  /**
+   * @param {import('./lib/types.js').BridgeEvent} obj
+   */
   function broadcast(obj) {
     for (const a of agents) send(a, obj);
   }

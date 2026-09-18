@@ -45,6 +45,7 @@ const EXPECT = {
     + '{checked, value, text: target contains, gone: target removed, appears: selector/text now on page}',
 };
 
+/** @type {import('./lib/types.js').McpTool[]} */
 export const TOOLS = [
   {
     name: 'snapshot',

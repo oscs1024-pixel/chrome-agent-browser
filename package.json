@@ -28,8 +28,8 @@
     "diagrams": "python3 scripts/render_diagrams.py"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.22.0",
-    "ws": "^8.18.3"
+    "@modelcontextprotocol/sdk": "1.22.0",
+    "ws": "8.18.3"
   },
   "keywords": [
     "mcp",
